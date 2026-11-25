@@ -1,0 +1,11 @@
+packages:
+# [upstream-sync] absorbed frontend packages (generated; do not edit by hand)
+  - "obf/design-system/packages/design-tokens"
+  - "obf/design-system/packages/theme-openbitfun"
+  - "obf/design-system/packages/ui"
+  - "obf/design-system/tooling/token-engine"
+  - "obf/packages/flow-chat-presentation"
+  - "obf/src/miniapp-market-web"
+  - "obf/src/mobile-web"
+  - "obf/src/web-ui"
+# [upstream-sync] absorbed frontend packages end

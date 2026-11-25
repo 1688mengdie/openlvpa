@@ -1,0 +1,75 @@
+{
+  "_comment": "The single source of truth for every absorbed source tree this repository takes in. Each entry names a project the host adopts: a root directory, the upstream remote and branch it is taken from, the files the mechanisms key on, and -- under `sync` -- what that particular tree is, which a mechanism cannot know on its own. Every mechanism reads this file by entry rather than by a directory name written into its own source, so a project is added by adding one entry here and changing no mechanism, and how many entries there are is read from this array rather than stated anywhere.",
+  "_snapshot": "`snapshotFile` is where the tree's own manifest is kept after the take strips the tree: it is the file the deriving arm reads members, excludes, workspace data, patch edges and profiles out of, and it is written by the take at the one moment the taken manifest exists. It is not hand-filled.",
+  "_mechanismBinding": "Every consumer resolves a project through this table and never through a literal. A mechanism that spelled a tree's name in its own source would be a mechanism that recognises its source; the name belongs in this declaration and nowhere else.",
+  "_sync": "Each entry's `sync` block states what that tree is. `mechanism` is which of `absorbed-sources.mjs`'s `MECHANISMS` this tree is, and it pairs with `packageDirectory` the one way round: a `cargo-workspace` tree's root is its workspace, so it leaves the key out, and a `single-crate` tree's root is above its crate, so it names the directory holding that crate. An entry that breaks the pairing is refused. `packageManifest` is the file the take reads the tree's identity out of, written as this repository's path to that file. `buildConfigFiles` is written as paths INSIDE the declared root. `frontend` names the packages in the tree the host chain starts that tree's frontend from, each with the membership that decides where it goes: `pnpm-closure` packages are carried by the host `pnpm-workspace.yaml` together with every package they reach through a `workspace:` dependency, `mini-app-payload` packages are landed as a MiniApp instead and never enter that closure, and `own-resolver` packages are built by a resolver of their own inside the tree (the extension host is built with bun, so a pnpm membership would install it twice under two resolvers and take its tree away from the lockfile the tree decides it by).",
+  "_entries": "One entry per absorbed tree, in the order the mechanisms act on them; a bare invocation acts on the first. Neither tree stages its own frontend builds on this side: the host chain starts each tree's frontend from the tree itself.",
+  "projects": [
+    {
+      "id": "obf",
+      "root": "obf",
+      "url": "https://github.com/GCWing/BitFun.git",
+      "branch": "main",
+      "snapshotFile": "scripts/obf-upstream-manifest.toml",
+      "stripManifest": "scripts/strip-manifest.json",
+      "sync": {
+        "mechanism": "cargo-workspace",
+        "packageManifest": "obf/package.json",
+        "buildConfigFiles": [
+          "package.json"
+        ],
+        "frontend": {
+          "roots": [
+            {
+              "path": "src/web-ui",
+              "membership": "pnpm-closure"
+            },
+            {
+              "path": "src/mobile-web",
+              "membership": "pnpm-closure"
+            },
+            {
+              "path": "src/miniapp-market-web",
+              "membership": "pnpm-closure"
+            },
+            {
+              "path": "src/apps/extension-host",
+              "membership": "own-resolver"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "openalgo-desktop",
+      "root": "openalgo-desktop",
+      "url": "https://github.com/marketcalls/openalgo-desktop.git",
+      "branch": "master",
+      "snapshotFile": "scripts/openalgo-desktop-upstream-manifest.toml",
+      "stripManifest": "scripts/strip-manifest.json",
+      "sync": {
+        "mechanism": "single-crate",
+        "packageDirectory": "src-tauri",
+        "packageManifest": "openalgo-desktop/package.json",
+        "buildConfigFiles": [
+          "package.json",
+          "vite.config.ts",
+          "tsconfig.json",
+          "tsconfig.app.json",
+          "tsconfig.node.json",
+          "index.html",
+          "src-tauri/tauri.conf.json",
+          "src-tauri/build.rs"
+        ],
+        "frontend": {
+          "roots": [
+            {
+              "path": ".",
+              "membership": "mini-app-payload"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

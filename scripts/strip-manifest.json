@@ -1,0 +1,45 @@
+{
+  "_reads": "`tables` names every TOML table the take reads out of a manifest and then removes, because a table read out of a tree and left standing in it is a second answer to the same question. Their marker and workspace tables are read only when the manifest declares a workspace, since that is the shape whose meaning differs at a crate root.",
+  "_comment": "The single rule face every taken tree is filtered by on the way in, however many trees are declared. No entry has an exception and no entry has a depth limit: a rule that matched only at the top would leave a second answer further down, and a second answer is the same thing as a second graph wherever it sits.",
+  "_predicate": "A taken tree carries static source and nothing that can speak for itself. What speaks for itself is a version-control entry point, a build root, a package-manager root, or a generated artifact. A crate's `Cargo.toml` and a package's `package.json` are identity cards and stay; any workspace table inside either is removed on the way in, because a workspace table is a graph root rather than an identity.",
+  "tables": [
+    "[patch.crates-io]",
+    "[profile.*]"
+  ],
+  "workspaceTables": [
+    "[workspace]",
+    "[workspace.*]"
+  ],
+  "workspaceTablePattern": "^\\s*\\[workspace(\\]|\\.)",
+  "workspaceKeyPattern": "^\\s*\"workspaces\"\\s*:\\s*[\\[{]",
+  "excludedFileNames": [
+    "Cargo.lock",
+    "pnpm-workspace.yaml",
+    "pnpm-lock.yaml",
+    "package-lock.json",
+    "yarn.lock",
+    "bun.lock",
+    "bun.lockb",
+    "npm-shrinkwrap.json",
+    ".npmrc"
+  ],
+  "excludedDirNames": [
+    ".git",
+    ".github",
+    ".cargo",
+    "node_modules",
+    ".pnpm-store",
+    "dist",
+    "build",
+    "target",
+    ".turbo",
+    "coverage"
+  ],
+  "excludedFilePrefixes": [
+    ".yarnrc",
+    ".vite"
+  ],
+  "excludedFileSuffixes": [
+    ".tsbuildinfo"
+  ]
+}
