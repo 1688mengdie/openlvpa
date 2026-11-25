@@ -7,8 +7,12 @@ target/
 node_modules/
 dist/
 *.tsbuildinfo
+crates/seams/rustc-wrapper/bin/
+.lvpa-seam-run/
+crates/seams/openalgo-backend/src/table.rs
 
 # 运行时与临时
 .openlvpa/
 *.log
 *.tmp
+.openbitfun/

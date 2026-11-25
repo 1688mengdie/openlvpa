@@ -4,9 +4,9 @@
 
 Lion Volume Price Action.
 
-OpenLVPA 把 OpenBitFun 与 OpenAlgo Desktop 两套原版软件合成一件产物，加上中文化与 LVPA 自己的策略与呈显，成品只有一件。
+OpenLVPA 把 OpenBitFun 与 OpenAlgo Desktop 两套原版软件合成一件产物，成品只有一件。OpenBitFun 的原生前端即唯一的桌面壳；OpenAlgo Desktop 的前端去壳，以 MiniApp 承载，落用户配置位置，带 i18n 中文补丁显示。
 
-上游源码不入本仓。它由同步步按声明的远端与分支在每次构建时取入，本仓只存组装、接缝与本地化。取用声明见 `NOTICE`。
+上游源码不入本仓。它由同步步按声明的远端与分支在每次构建时取入，本仓只存组装、接缝与扩展。取用声明见 `NOTICE`。
 
 ## 两条命令
 
