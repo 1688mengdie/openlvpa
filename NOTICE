@@ -1,0 +1,30 @@
+OpenLVPA
+Copyright (C) 2026 1688mengdie
+
+This product is distributed under the GNU Affero General Public License,
+version 3 (AGPL-3.0). The full text is in LICENSE.
+
+This product is assembled from the following upstream projects. Their source
+code is not committed to this repository. It is taken by the sync step from the
+remotes named below, at the branch named below, on every build. See AGPL-3.0
+section 13 and section 6 for the obligations that follow from distribution.
+
+--------------------------------------------------------------------------
+1. OpenBitFun
+   Remote:    https://github.com/GCWing/BitFun.git
+   Branch:    main
+   License:   MIT
+   Copyright (c) 2026 CWing
+   The MIT text is in LICENSE-MIT. The MIT notice and permission notice are
+   retained for every copy of the OpenBitFun part of this product.
+
+2. OpenAlgo Desktop
+   Remote:    https://github.com/marketcalls/openalgo-desktop.git
+   Branch:    master
+   License:   GNU Affero General Public License, version 3
+   The AGPL-3.0 text is in LICENSE.
+
+--------------------------------------------------------------------------
+The Chinese localization, the assembly layer, the seam faces under crates/
+and the LVPA strategy and presentation work are original to this project and
+are distributed under the same AGPL-3.0.
