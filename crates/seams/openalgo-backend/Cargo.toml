@@ -1,0 +1,14 @@
+[package]
+name = "lvpa-seam-openalgo-backend"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "lvpa_seam_openalgo_backend"
+path = "src/lib.rs"
+
+[dependencies]
+tauri = { workspace = true }
