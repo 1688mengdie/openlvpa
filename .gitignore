@@ -1,0 +1,14 @@
+# 上游源码树：由同步步按声明的远端与分支取入，不入本仓
+obf/
+openalgo-desktop/
+
+# 编译与安装产物
+target/
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 运行时与临时
+.openlvpa/
+*.log
+*.tmp
