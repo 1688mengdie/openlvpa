@@ -1,0 +1,55 @@
+{
+  "file": "openalgo-desktop/src/components/layout/Navbar.tsx",
+  "landed": "The copy this patch is replayed on is the one sync-openalgo-frontend lands in the MiniApp user position, not the byte-frozen tree.",
+  "description": "The navbar and its mobile sheet read the word table. Anchors stand on the exported Navbar component, the imported sheet parts, and the rendered label lines; none counts lines or offsets.",
+  "replacements": [
+    {
+      "find": "import { isActiveRoute, mobileSheetItems, navItems } from '@/config/navigation'",
+      "replace": "import { isActiveRoute, mobileSheetItems, navItems } from '@/config/navigation'\nimport { useWord } from '@/i18n'"
+    },
+    {
+      "find": "export function Navbar({ fluid = false }: NavbarProps = {}) {",
+      "replace": "export function Navbar({ fluid = false }: NavbarProps = {}) {\n  const word = useWord()"
+    },
+    {
+      "find": "<SheetTitle>Navigation Menu</SheetTitle>",
+      "replace": "<SheetTitle>{word('nav.openMenu')}</SheetTitle>"
+    },
+    {
+      "find": "<SheetDescription>Main navigation and quick access links</SheetDescription>",
+      "replace": "<SheetDescription>{word('nav.openMenuDescription')}</SheetDescription>"
+    },
+    {
+      "find": "                  Navigation\n                </div>",
+      "replace": "                  {word('nav.section.navigation')}\n                </div>"
+    },
+    {
+      "find": "                  Quick Access\n                </div>",
+      "replace": "                  {word('nav.section.quickAccess')}\n                </div>"
+    },
+    {
+      "find": "                      <item.icon className=\"h-4 w-4\" />\n                      {item.label}\n                    </>",
+      "replace": "                      <item.icon className=\"h-4 w-4\" />\n                      {word(item.label)}\n                    </>"
+    },
+    {
+      "find": "                      <item.icon className=\"h-4 w-4\" />\n                      {item.label}\n                    </Link>",
+      "replace": "                      <item.icon className=\"h-4 w-4\" />\n                      {word(item.label)}\n                    </Link>"
+    },
+    {
+      "find": "                {item.label}\n              </a>",
+      "replace": "                {word(item.label)}\n              </a>"
+    },
+    {
+      "find": "                {item.label}\n              </Link>",
+      "replace": "                {word(item.label)}\n              </Link>"
+    },
+    {
+      "find": "                More\n                <ChevronDown className=\"h-3.5 w-3.5 opacity-70\" />",
+      "replace": "                {word('nav.more')}\n                <ChevronDown className=\"h-3.5 w-3.5 opacity-70\" />"
+    },
+    {
+      "find": "<span className=\"sr-only\">Toggle menu</span>",
+      "replace": "<span className=\"sr-only\">{word('nav.toggleMenu')}</span>"
+    }
+  ]
+}

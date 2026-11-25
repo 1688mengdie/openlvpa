@@ -1,0 +1,47 @@
+{
+  "file": "openalgo-desktop/src/hooks/usePageTitle.ts",
+  "landed": "The copy this patch is replayed on is the one sync-openalgo-frontend lands in the MiniApp user position, not the byte-frozen tree.",
+  "description": "The route titles carry word-table keys and the window title resolves them. Anchors stand on the exported hook and the route table each title sits in; they name the route a title belongs to rather than a position in the table.",
+  "replacements": [
+    {
+      "find": "import { useLocation } from 'react-router'",
+      "replace": "import { useLocation } from 'react-router'\nimport { wordFor } from '@/i18n'"
+    },
+    {
+      "find": "const PAGE_TITLES: Record<string, string> = {\n  '/': 'Home',\n  '/faq': 'FAQ',\n  '/setup': 'Setup',\n  '/login': 'Login',\n  '/reset-password': 'Reset Password',\n  '/download': 'Download',\n  '/broker': 'Select Broker',\n  '/broker/config': 'Broker Configuration',\n  '/dashboard': 'Dashboard',\n  '/positions': 'Positions',\n  '/orderbook': 'Order Book',\n  '/tradebook': 'Trade Book',\n  '/holdings': 'Holdings',\n  '/search': 'Search',\n  '/search/token': 'Token Search',\n  '/apikey': 'API Key',\n  '/platforms': 'Platforms',\n  '/tradingview': 'TradingView',\n  '/gocharting': 'GoCharting',\n  '/pnl-tracker': 'P&L Tracker',\n  '/sandbox': 'Sandbox',\n  '/sandbox/mypnl': 'Sandbox P&L',\n  '/analyzer': 'Analyzer',\n  '/tools': 'Tools',\n  '/strategybuilder': 'Strategy Builder',\n  '/strategybuilder/portfolio': 'Strategy Portfolio',\n  '/optionchain': 'Option Chain',\n  '/ivchart': 'IV Chart',\n  '/oitracker': 'OI Tracker',\n  '/oirange': 'OI Range',\n  '/gammadensity': 'Gamma Density',\n  '/maxpain': 'Max Pain',\n  '/straddle': 'Straddle Chart',\n  '/straddlepnl': 'Straddle P&L',\n  '/volsurface': 'Vol Surface',\n  '/gex': 'GEX Dashboard',\n  '/strikeprofile': 'Strike Profile',\n  '/ivsmile': 'IV Smile',\n  '/oiprofile': 'OI Profile',\n  '/websocket/test': 'WebSocket Test',\n  '/websocket/order': 'Order Stream',\n  // Desktop: /python titles removed (not in this version).\n  '/strategy': 'Strategies',\n  '/strategy/new': 'New Strategy',\n  '/chartink': 'Chartink Strategies',\n  '/chartink/new': 'New Chartink Strategy',\n  '/flow': 'Flow',\n  '/flow/shortcuts': 'Flow Shortcuts',\n  '/leverage': 'Leverage',\n  '/admin': 'Admin',\n  '/admin/freeze': 'Freeze Qty',\n  '/admin/holidays': 'Holidays',\n  '/admin/timings': 'Market Timings',\n  '/telegram': 'Telegram',\n  '/telegram/config': 'Telegram Config',\n  '/telegram/users': 'Telegram Users',\n  '/telegram/analytics': 'Telegram Analytics',\n  '/logs': 'Logs',\n  '/logs/live': 'Live Logs',\n  '/logs/sandbox': 'Sandbox Logs',\n  '/logs/security': 'Security',\n  '/logs/traffic': 'Traffic',\n  '/logs/latency': 'Latency',\n  '/health': 'Health Monitor',\n  '/profile': 'Profile',\n  '/master-contract': 'Master Contract',\n  '/action-center': 'Action Center',\n  // Desktop: in-app server settings page.\n  '/settings/server': 'Server Settings',\n  '/playground': 'Playground',\n  '/historify': 'Historify',\n  '/historify/charts': 'Historify Charts',",
+      "replace": "const PAGE_TITLES: Record<string, string> = {\n  '/': 'page.home',\n  '/faq': 'page.faq',\n  '/setup': 'page.setup',\n  '/login': 'page.login',\n  '/reset-password': 'page.resetPassword',\n  '/download': 'page.download',\n  '/broker': 'page.broker',\n  '/broker/config': 'page.brokerConfig',\n  '/dashboard': 'page.dashboard',\n  '/positions': 'page.positions',\n  '/orderbook': 'page.orderbook.title',\n  '/tradebook': 'page.tradebook.title',\n  '/holdings': 'page.holdings',\n  '/search': 'page.search',\n  '/search/token': 'page.tokenSearch',\n  '/apikey': 'page.apiKey',\n  '/platforms': 'page.platforms',\n  '/tradingview': 'page.tradingview',\n  '/gocharting': 'page.gocharting',\n  '/pnl-tracker': 'page.pnlTracker',\n  '/sandbox': 'page.sandbox',\n  '/sandbox/mypnl': 'page.sandboxPnl',\n  '/analyzer': 'page.analyzer',\n  '/tools': 'page.tools',\n  '/strategybuilder': 'page.strategyBuilder',\n  '/strategybuilder/portfolio': 'page.strategyPortfolio',\n  '/optionchain': 'page.optionChain',\n  '/ivchart': 'page.ivChart',\n  '/oitracker': 'page.oiTracker',\n  '/oirange': 'page.oiRange',\n  '/gammadensity': 'page.gammaDensity',\n  '/maxpain': 'page.maxPain',\n  '/straddle': 'page.straddleChart',\n  '/straddlepnl': 'page.straddlePnl',\n  '/volsurface': 'page.volSurface',\n  '/gex': 'page.gexDashboard',\n  '/strikeprofile': 'page.strikeProfile',\n  '/ivsmile': 'page.ivSmile',\n  '/oiprofile': 'page.oiProfile',\n  '/websocket/test': 'page.websocketTest',\n  '/websocket/order': 'page.orderStream',\n  // Desktop: /python titles removed (not in this version).\n  '/strategy': 'page.strategies',\n  '/strategy/new': 'page.newStrategy',\n  '/chartink': 'page.chartinkStrategies',\n  '/chartink/new': 'page.newChartinkStrategy',\n  '/flow': 'page.flow',\n  '/flow/shortcuts': 'page.flowShortcuts',\n  '/leverage': 'page.leverage',\n  '/admin': 'page.admin',\n  '/admin/freeze': 'page.freezeQty',\n  '/admin/holidays': 'page.holidays',\n  '/admin/timings': 'page.marketTimings',\n  '/telegram': 'page.telegram',\n  '/telegram/config': 'page.telegramConfig',\n  '/telegram/users': 'page.telegramUsers',\n  '/telegram/analytics': 'page.telegramAnalytics',\n  '/logs': 'page.logs',\n  '/logs/live': 'page.liveLogs',\n  '/logs/sandbox': 'page.sandboxLogs',\n  '/logs/security': 'page.security',\n  '/logs/traffic': 'page.traffic',\n  '/logs/latency': 'page.latency',\n  '/health': 'page.healthMonitor',\n  '/profile': 'page.profile',\n  '/master-contract': 'page.masterContract',\n  '/action-center': 'page.actionCenter',\n  // Desktop: in-app server settings page.\n  '/settings/server': 'page.serverSettings',\n  '/playground': 'page.playground',\n  '/historify': 'page.historify',\n  '/historify/charts': 'page.historifyCharts',"
+    },
+    {
+      "find": "title: 'WebSocket Test' }",
+      "replace": "title: 'page.websocketTest' }"
+    },
+    {
+      "find": "title: 'Historify Charts' }",
+      "replace": "title: 'page.historifyCharts' }"
+    },
+    {
+      "find": "title: 'Edit Strategy' }",
+      "replace": "title: 'page.editStrategy' }"
+    },
+    {
+      "find": "title: 'Strategy' }",
+      "replace": "title: 'page.strategy' }"
+    },
+    {
+      "find": "title: 'Configure Chartink' }",
+      "replace": "title: 'page.configureChartink' }"
+    },
+    {
+      "find": "title: 'View Chartink Strategy' }",
+      "replace": "title: 'page.viewChartinkStrategy' }"
+    },
+    {
+      "find": "title: 'Flow Editor' }",
+      "replace": "title: 'page.flowEditor' }"
+    },
+    {
+      "find": "`${title} | OpenAlgo`",
+      "replace": "`${wordFor(title)} | OpenAlgo`"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "file": "openalgo-desktop/src-tauri/Cargo.toml",
+  "description": "One libsqlite3-sys in the graph: the driver the absorbed desktop tree asks for, at the version the other absorbed tree already pins.",
+  "replacements": [
+    {
+      "find": "rusqlite = { version = \"0.41\", default-features = false, features = [\"bundled\", \"cache\", \"fallible_uint\"] }",
+      "replace": "rusqlite = { version = \"0.32\", default-features = false, features = [\"bundled\"] }"
+    }
+  ]
+}

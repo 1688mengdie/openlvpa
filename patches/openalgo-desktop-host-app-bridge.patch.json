@@ -1,0 +1,34 @@
+{
+  "file": "openalgo-desktop/src/lib/desktop.ts",
+  "description": "The landed copy runs as a MiniApp inside the host page, where the host already injects its own runtime adapter as `window.app` (product-domains/miniapp/bridge_builder.rs, `Exposes window.app with call(), fs.*, shell.*, ...`). The shell's own package is not there, and nothing here stands in its place: the import of `@tauri-apps/api/core` goes, and each call reaches the adapter the host already publishes. `isTauri` becomes a read of whether that adapter stands, each `invoke` reads that same field into a local before it calls, and the shell plugin's `open` becomes the adapter's `system.openExternal`. The anchors are that import line, the predicate it fed, the four call sites, and the one plugin import, never a line or an offset.",
+  "replacements": [
+    {
+      "find": "import { invoke, isTauri } from '@tauri-apps/api/core'\n",
+      "replace": "declare global {\n  var app:\n    | {\n        call: (method: string, params?: Record<string, unknown>) => Promise<unknown>\n        system: { openExternal: (url: string) => Promise<void> }\n      }\n    | undefined\n}\n"
+    },
+    {
+      "find": "    return isTauri()\n",
+      "replace": "    return globalThis.app !== undefined\n"
+    },
+    {
+      "find": "    const { open } = await import('@tauri-apps/plugin-shell')\n    await open(url)\n",
+      "replace": "    const host = globalThis.app\n    if (host === undefined) throw new Error('the host page publishes no adapter, so no address can be handed out')\n    await host.system.openExternal(url)\n"
+    },
+    {
+      "find": "    return await invoke<ResetAccountOutcome>('reset_account')\n",
+      "replace": "    const host = globalThis.app\n    if (host === undefined) throw new Error('the host page publishes no adapter, so the account cannot be reset')\n    return (await host.call('reset_account')) as ResetAccountOutcome\n"
+    },
+    {
+      "find": "    return await invoke<StartFreshOutcome>('start_fresh', {\n      newPassword,\n      confirmPassword,\n      reason,\n    })\n",
+      "replace": "    const host = globalThis.app\n    if (host === undefined) throw new Error('the host page publishes no adapter, so the account cannot be started fresh')\n    return (await host.call('start_fresh', {\n      newPassword,\n      confirmPassword,\n      reason,\n    })) as StartFreshOutcome\n"
+    },
+    {
+      "find": "  windowProof ??= invoke<string>('window_proof').catch(() => {",
+      "replace": "  const host = globalThis.app\n  windowProof ??= (host === undefined ? Promise.reject(new Error('the host page publishes no adapter')) : (host.call('window_proof') as Promise<string>)).catch(() => {"
+    },
+    {
+      "find": "    return await invoke<RestartOutcome>('restart_to_update', { confirmed: confirmed ?? null })\n",
+      "replace": "    const host = globalThis.app\n    if (host === undefined) throw new Error('the host page publishes no adapter, so the update cannot be reached')\n    return (await host.call('restart_to_update', { confirmed: confirmed ?? null })) as RestartOutcome\n"
+    }
+  ]
+}

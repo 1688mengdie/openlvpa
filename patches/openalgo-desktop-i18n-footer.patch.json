@@ -1,0 +1,27 @@
+{
+  "file": "openalgo-desktop/src/components/layout/Footer.tsx",
+  "landed": "The copy this patch is replayed on is the one sync-openalgo-frontend lands in the MiniApp user position, not the byte-frozen tree.",
+  "description": "The footer's fixed strings read the word table. Anchors stand on the imported badge/button parts, the exported Footer component and the rendered text lines.",
+  "replacements": [
+    {
+      "find": "import { Button } from '@/components/ui/button'",
+      "replace": "import { Button } from '@/components/ui/button'\nimport { useWord } from '@/i18n'"
+    },
+    {
+      "find": "export function Footer({ className }: FooterProps) {",
+      "replace": "export function Footer({ className }: FooterProps) {\n  const word = useWord()"
+    },
+    {
+      "find": "<span>Copyright 2026</span>",
+      "replace": "<span>{word('footer.copyright')}</span>"
+    },
+    {
+      "find": "Open Source Algo Platform for Everyone",
+      "replace": "{word('footer.tagline')}"
+    },
+    {
+      "find": "{activeSessionCount} {activeSessionCount === 1 ? 'session' : 'sessions'}",
+      "replace": "{activeSessionCount} {word(activeSessionCount === 1 ? 'footer.session.one' : 'footer.session.other')}"
+    }
+  ]
+}
