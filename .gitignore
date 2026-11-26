@@ -11,10 +11,7 @@ crates/seams/rustc-wrapper/bin/
 .lvpa-seam-run/
 
 # 运行时与临时
-.openlvpa/*
-!.openlvpa/run/
-.openlvpa/run/*
-!.openlvpa/run/tauri.root.conf.json
+.openlvpa/
 *.log
 *.tmp
 .openbitfun/
