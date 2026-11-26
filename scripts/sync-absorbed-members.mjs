@@ -1729,13 +1729,6 @@ function buildExpectedSegments(project, declaration, graph, snapshotMemberTextVa
   const crateRole = 'This entry is the backend crate the extension mechanism hands in, never the shell the deshell step takes off: ';
   const crateName = project.sync?.backendPackage;
   const stripped = strippedAbsence(project);
-  if ((crateName === undefined) !== (crateDirectory === '')) {
-    throw new Error(
-      `[sync-absorbed-members] ${project.id} declares \`sync.packageDirectory\` as ${JSON.stringify(crateDirectory)} and ` +
-        `\`sync.backendPackage\` as ${JSON.stringify(crateName)}, and one of the two says where the crate stands while the ` +
-        'other says what it is called',
-    );
-  }
   if (crateName === undefined) {
     throw new Error(
       `[sync-absorbed-members] ${project.id} names no \`sync.backendPackage\`, so the one member the mirror carries for it ` +

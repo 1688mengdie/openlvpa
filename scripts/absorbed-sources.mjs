@@ -299,9 +299,11 @@ export const TREE_PACKAGE_MANIFEST = 'package.json';
 
 export function identityCardNames(project) {
   const face = stripRules(project);
-  return [TREE_MANIFEST, TREE_PACKAGE_MANIFEST]
-    .filter((name) => face.within(name))
-    .sort((left, right) => left.localeCompare(right));
+  return identityCardFileNames(face);
+}
+
+function identityCardFileNames(face) {
+  return [TREE_MANIFEST, TREE_PACKAGE_MANIFEST].filter((name) => face.within(name));
 }
 
 function readBySource(root, name) {
@@ -365,7 +367,7 @@ function sparesOnFace(face, cardDirs, readNames, entry, root) {
 
 export function manifestCapture(project) {
   const face = stripRules(project);
-  const names = identityCardNames(project);
+  const names = identityCardFileNames(face);
   if (names.length === 0) {
     throw new Error(
       `[absorbed-sources] ${project.stripManifest} strips none of ${TREE_MANIFEST} or ${TREE_PACKAGE_MANIFEST}, so the ` +

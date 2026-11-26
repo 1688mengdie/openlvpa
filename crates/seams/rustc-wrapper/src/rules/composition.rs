@@ -7,6 +7,7 @@ pub enum Composition {
         envelope: &'static str,
         seam: &'static str,
         entry: &'static str,
+        site: &'static str,
     },
 }
 
@@ -42,21 +43,19 @@ pub fn commands(text: &str) -> Option<Vec<Command>> {
 }
 
 fn is_command(function: &syn::ItemFn) -> bool {
-    for attribute in &function.attrs {
-        if !attribute.path().is_ident("tauri") {
-            continue;
-        }
-        let parsed = attribute.parse_args_with(
-            syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
-        );
-        let Ok(nested) = parsed else {
-            continue;
-        };
-        if nested.iter().any(|meta| meta.path().is_ident("command")) {
-            return true;
-        }
-    }
-    false
+    function
+        .attrs
+        .iter()
+        .any(|attribute| attribute.path().is_ident("tauri") && names_a_command(attribute))
+}
+
+fn names_a_command(attribute: &syn::Attribute) -> bool {
+    let Ok(nested) = attribute.parse_args_with(
+        syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+    ) else {
+        return false;
+    };
+    nested.iter().any(|meta| meta.path().is_ident("command"))
 }
 
 fn command_argument(function: &syn::ItemFn) -> Option<String> {
@@ -169,10 +168,17 @@ pub fn table(commands: &[Command]) -> String {
     out
 }
 
-pub fn wrap(text: &str, carried: &str, envelope: &'static str, entry: &'static str) -> crate::semantic::Nesting {
+pub fn wrap(
+    text: &str,
+    carried: &str,
+    envelope: &'static str,
+    entry: &'static str,
+    site: &'static str,
+) -> crate::semantic::Nesting {
     let nest = crate::semantic::Nest {
         envelope,
         entry,
+        site,
     };
     crate::semantic::nest(text, &carried_path(carried), &nest)
 }

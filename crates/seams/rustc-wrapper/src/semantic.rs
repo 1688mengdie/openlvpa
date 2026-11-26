@@ -1,6 +1,7 @@
 pub struct Nest {
     pub envelope: &'static str,
     pub entry: &'static str,
+    pub site: &'static str,
 }
 
 pub struct Composition {
@@ -69,6 +70,7 @@ pub fn nest(text: &str, file: &str, seam: &Nest) -> Nesting {
     out.push_str(&entry);
     out.push_str("()\n");
     out.push_str(&inner);
+    out.push_str(seam.site);
     out.push_str(&text[after_close..]);
     Nesting::Landed(Composition {
         text: out,

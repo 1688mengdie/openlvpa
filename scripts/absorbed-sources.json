@@ -50,6 +50,7 @@
       "stripManifest": "scripts/strip-manifest.json",
       "sync": {
         "mechanism": "single-crate",
+        "packageDirectory": "src-tauri",
         "strippedPackageDirectory": "src-tauri",
         "backendPackage": "openalgo-desktop",
         "packageManifest": "openalgo-desktop/package.json",

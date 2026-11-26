@@ -1,7 +1,7 @@
 use super::{CrateSpec, Locate, Rule, Seam, SeamBody, SeamHost, SeamSeed};
 
 pub const SPEC: CrateSpec = CrateSpec {
-    crate_path: "src-tauri/src",
+    crate_path: "src",
     source_tree: "openalgo-desktop",
     package: "openalgo-desktop",
     crate_name: "openalgo_desktop_lib",
@@ -28,5 +28,6 @@ const BACKEND_RULES: &[Rule] = &[Rule {
         envelope: "handler",
         seam: "lvpa_openalgo_backend",
         entry: "startup_status",
+        site: "        lvpa_openalgo_backend::open(lvpa_openalgo_backend::Seam {\n            next: Box::new(handler),\n            refused: Default::default(),\n        }),\n",
     }),
 }];

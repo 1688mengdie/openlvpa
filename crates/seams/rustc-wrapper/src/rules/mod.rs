@@ -631,13 +631,7 @@ fn declared_root(spec: &CrateSpec) -> Option<String> {
     let (repository, trees) = crate::sources::trees().ok()?;
     let tree = trees.iter().find(|tree| tree.id == spec.source_tree)?;
     let landed = crate::sources::resolve_root(tree, &repository).join(spec.crate_path);
-    if holds_a_crate_root(&landed) {
-        return Some(crate::sources::normalize(&landed));
-    }
-    match landed.parent() {
-        Some(parent) if holds_a_crate_root(parent) => Some(crate::sources::normalize(parent)),
-        _ => None,
-    }
+    holds_a_crate_root(&landed).then(|| crate::sources::normalize(&landed))
 }
 
 fn holds_a_crate_root(src: &Path) -> bool {

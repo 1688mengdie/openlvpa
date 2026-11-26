@@ -473,6 +473,7 @@ function strip() {
   for (const project of projects) {
     const face = stripRules(project);
     const root = projectRoot(project);
+    const cards = identityCardNames(project);
     const walk = (dir) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const full = join(dir, entry.name);
@@ -480,7 +481,7 @@ function strip() {
           walk(full);
           continue;
         }
-        if (!face.within(entry.name)) {
+        if (!face.within(entry.name) || cards.includes(entry.name)) {
           if (entry.isDirectory()) walk(full);
           continue;
         }

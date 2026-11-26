@@ -1156,6 +1156,7 @@ fn resolve(
             let crate::rules::composition::Composition::Envelope {
                 envelope,
                 entry,
+                site,
                 ..
             } = composition;
             let seam = match rule_seam(rule) {
@@ -1174,7 +1175,7 @@ fn resolve(
                     "the workspace root did not resolve, so the seam body cannot be read",
                 ),
             };
-            match crate::rules::composition::wrap(&current, &carried, envelope, entry) {
+            match crate::rules::composition::wrap(&current, &carried, envelope, entry, site) {
                 crate::semantic::Nesting::Landed(composed) => {
                     crate::rules::Landed::Rewritten(composed.text)
                 }
