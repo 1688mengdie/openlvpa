@@ -31,7 +31,7 @@ fn main() {
     for step in order_for(entrance) {
         if guarantee {
             let g = step.guarantee();
-            println!("{}\t{}\t{}", step.name(), g.refuses_when, g.on_disk.join(","));
+            println!("{}\t{}\t{}", step.name(), g.on_disk.join(","), g.leaves.join(","));
         } else {
             println!("{}", step.name());
         }

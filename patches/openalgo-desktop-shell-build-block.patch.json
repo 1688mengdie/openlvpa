@@ -1,5 +1,6 @@
 {
   "file": "openalgo-desktop/src-tauri/build.rs",
+  "landed": "frontend",
   "retains": "println!(\"cargo:rustc-cfg=e2e_build_allowed\");",
   "description": "issue #1 clause 9 keeps this crate as a member of the mirror workspace for its backend and drops the Tauri shell from it. `tauri_build::try_build` is the shell's own build step: it reads tauri.conf.json, resolves capabilities and icons, and writes the generated context into OUT_DIR for `tauri::generate_context!`. A backend member answers to the workspace, not to a window, so the anchor is the whole shell block from the comment that introduces the app's commands to the panic it raises, never a line or an offset. The text this patch leaves standing is the E2E cfg line, which is what tells a removed block from a spent anchor.",
   "replacements": [

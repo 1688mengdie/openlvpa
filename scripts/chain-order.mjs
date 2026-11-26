@@ -38,23 +38,36 @@ function listChain(entrance, extra) {
   return rows;
 }
 
+export const GUARANTEES = '--guarantees';
+
 export function chainOrder(entrance) {
-  return listChain(entrance, []);
+  return listChain(entrance, []).map((row) => row.split('\t')[0]);
 }
 
 export function chainGuarantees(entrance) {
-  const rows = listChain(entrance, ['--guarantees']);
   const table = new Map();
-  for (const row of rows) {
-    const [name, refuses, onDisk] = row.split('\t');
-    if (name === undefined || refuses === undefined) {
-      process.stderr.write(`[chain-order] ${ORDER_BIN} --guarantees emitted a row this reader cannot place: ${row}\n`);
+  for (const row of listChain(entrance, [GUARANTEES])) {
+    const [name, onDisk, leaves] = row.split('\t');
+    if (name === undefined || onDisk === undefined || leaves === undefined) {
+      process.stderr.write(`[chain-order] ${ORDER_BIN} ${GUARANTEES} emitted a row this reader cannot place: ${row}\n`);
       process.exit(1);
     }
-    table.set(name, { refusesWhen: refuses, onDisk: (onDisk ?? '').split(',').filter((entry) => entry !== '') });  }
+    const column = (text) => text.split(',').filter((entry) => entry !== '');
+    table.set(name, { onDisk: column(onDisk), leaves: column(leaves) });
+  }
   return table;
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  for (const name of chainOrder(process.argv[2])) process.stdout.write(`${name}\n`);
+  const asked = process.argv.slice(2);
+  if (asked.length === 2 && asked[0] === GUARANTEES) {
+    for (const [name, held] of chainGuarantees(asked[1])) {
+      process.stdout.write(`${[name, held.onDisk.join(','), held.leaves.join(',')].join('\t')}\n`);
+    }
+  } else if (asked.length === 1) {
+    for (const name of chainOrder(asked[0])) process.stdout.write(`${name}\n`);
+  } else {
+    process.stderr.write(`[chain-order] name one entrance, or ${GUARANTEES} with one entrance\n`);
+    process.exit(2);
+  }
 }

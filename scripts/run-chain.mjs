@@ -1,12 +1,24 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { REPO_ROOT, SHELL_CRATE, tauriCli } from './desktop-config.mjs';
-import { absorbedProjects, buildConfigFiles, packageDirectoryPath, packageManifestPath, projectRoot } from './absorbed-sources.mjs';
+import { REPO_ROOT, TAURI_CONF, bundleDir, rootConfigPath, shellConfig, tauriCli } from './desktop-config.mjs';
+import {
+  absorbedProjects,
+  buildConfigFiles,
+  hostDerivedPath,
+  packageDirectoryPath,
+  packageManifestPath,
+  projectRoot,
+} from './absorbed-sources.mjs';
 import { chainOrder, chainGuarantees } from './chain-order.mjs';
-import { probeCompiler, runTauriToExit } from './tauri-run.mjs';
+import { parseToml, syncAbsorbedMembers } from './sync-absorbed-members.mjs';
+import { syncAbsorbedFrontend } from './sync-absorbed-frontend.mjs';
+import { resolveLanding, payloadDeclaration, payloadProject } from './miniapp-entry.mjs';
+import { panoramaBinary, wrapperArguments, wrapperBinary, wrapperEnvironment } from './install-rustc-wrapper.mjs';
+import { probeCompiler, removeRootConfig, runTauriToExit } from './tauri-run.mjs';
 import { targetDir } from './target-dir.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -15,10 +27,10 @@ function fail(step, message) {
   process.stderr.write(`[run-chain] FATAL at step ${step}: ${message}\n`);
   process.exit(1);
 }
-function run(command, args, step) {
+function run(command, args, step, environment = process.env) {
   const result = spawnSync(command, args, {
     cwd: REPO_ROOT,
-    env: process.env,
+    env: environment,
     stdio: 'inherit',
     shell: command.endsWith('.cmd'),
   });
@@ -30,105 +42,51 @@ function run(command, args, step) {
   }
 }
 
-function quiet(command, args) {
-  return spawnSync(command, args, { cwd: REPO_ROOT, env: process.env, encoding: 'utf8' });
-}
-
 function wrapper() {
-  run(process.execPath, [join(here, 'install-rustc-wrapper.mjs')], 'wrapper');
+  const environment = wrapperEnvironment({ ...process.env, CARGO_TARGET_DIR: targetDir() });
+  run(process.execPath, [join(here, 'install-rustc-wrapper.mjs')], 'wrapper', environment);
   const binary = wrapperBinary();
   if (!existsSync(binary) || statSync(binary).size === 0) {
     fail('wrapper', `${binary} is not on disk after the install`);
   }
-  const beside = join(dirname(binary), 'lvpa-capability-panorama.exe');
+  const beside = panoramaBinary();
   if (!existsSync(beside)) {
     fail('wrapper', `the install left no ${beside}`);
   }
   process.stdout.write(`[run-chain] wrapper: ${binary} is in place beside ${beside}\n`);
 }
 
-function wrapperBinary() {
-  const config = join(REPO_ROOT, '.cargo', 'config.toml');
-  if (!existsSync(config)) {
-    fail('wrapper', `${config} does not exist, so no rustc-wrapper is declared`);
-  }
-  const line = readFileSync(config, 'utf8')
-    .split(/\r?\n/)
-    .find((row) => /^\s*rustc-wrapper\s*=/.test(row));
-  if (!line) {
-    fail('wrapper', `${config} declares no [build] rustc-wrapper`);
-  }
-  const declared = line.match(/=\s*"([^"]+)"/);
-  if (!declared) {
-    fail('wrapper', `${config} declares rustc-wrapper without a quoted path`);
-  }
-  return join(REPO_ROOT, ...declared[1].split('/'));
-}
-
-function take() {
-  run(process.execPath, [join(here, 'sync-upstream.mjs')], 'take');
+function step(name) {
+  run(process.execPath, [join(here, 'sync-upstream.mjs'), name], name, wrapperEnvironment());
 }
 
 function absorb() {
-  run(process.execPath, [join(here, 'sync-absorbed-members.mjs')], 'absorb');
+  step('take');
 }
 
 function merge() {
-  run(process.execPath, [join(here, 'sync-absorbed-frontend.mjs')], 'merge');
+  step('merge');
 }
 
-function cargoManifests(root) {
-  const found = [];
-  const walk = (dir) => {
-    let entries;
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (entry.name === 'node_modules' || entry.name === 'target' || entry.name === '.git') continue;
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) walk(path);
-      else if (entry.name === 'Cargo.toml') found.push(path);
-    }
-  };
-  walk(root);
-  return found;
+function stripStep() {
+  step('strip');
 }
 
-function strip() {
-  const roots = JSON.parse(readFileSync(join(here, 'absorbed-sources.json'), 'utf8')).projects.map(
-    (project) => project.root,
-  );
-  const declared = [];
-  for (const root of roots) {
-    for (const path of cargoManifests(join(REPO_ROOT, ...root.split('/')))) {
-      const text = readFileSync(path, 'utf8');
-      if (/^\s*\[workspace[.\]]/m.test(text)) declared.push(path);
-    }
-  }
-  if (declared.length > 0) {
-    fail('strip', `a workspace table still stands inside the absorbed trees: ${declared.join(', ')}`);
-  }
-  for (const root of roots) {
-    for (const name of ['Cargo.lock', 'pnpm-workspace.yaml', 'pnpm-lock.yaml', 'package-lock.json', 'yarn.lock']) {
-      const path = join(REPO_ROOT, ...root.split('/'), name);
-      if (existsSync(path)) {
-        fail('strip', `${path} is a second member list or a second lock beside the one at the repository root`);
-      }
-    }
-  }
-  process.stdout.write(`[run-chain] strip: nothing inside ${roots.join(', ')} declares a workspace or holds a lock\n`);
+function deshellStep() {
+  step('deshell');
+}
+
+function patches() {
+  step('patches');
 }
 
 function seam() {
-  const panorama = join(dirname(wrapperBinary()), 'lvpa-capability-panorama.exe');
+  const panorama = panoramaBinary();
   if (!existsSync(panorama)) {
     fail('seam', `${panorama} is not on disk; the wrapper step has not run in this checkout`);
   }
   const read = (selector) => {
-    const listed = quiet(panorama, [selector]);
+    const listed = spawnSync(panorama, [selector], { cwd: REPO_ROOT, env: process.env, encoding: 'utf8' });
     if (listed.status !== 0) {
       fail('seam', `${panorama} ${selector} exited ${listed.status}: ${listed.stderr}`);
     }
@@ -151,96 +109,50 @@ function seam() {
   process.stdout.write(`[run-chain] seam: ${rows.length} seam(s) over ${covered.length} covered crate(s)\n`);
 }
 
-function patches() {
-  const declarations = readdirSync(join(REPO_ROOT, 'patches')).filter((name) => name.endsWith('.patch.json'));
-  if (declarations.length === 0) {
-    fail('patches', 'no patch declaration is on disk, so the take would carry the absorbed trees as upstream wrote them');
-  }
-  let landed = 0;
-  let already = 0;
-  let replayed = 0;
-  for (const name of declarations) {
-    const declaration = JSON.parse(readFileSync(join(REPO_ROOT, 'patches', name), 'utf8'));
-    if (declaration.landed !== undefined) {
-      replayed += 1;
-      continue;
-    }
-    landed += 1;
-    const target = join(REPO_ROOT, ...declaration.file.split('/'));
-    if (!existsSync(target)) {
-      fail('patches', `${name} targets ${declaration.file}, which the taken tree does not carry`);
-    }
-    const replacements = declaration.replacements ?? [];
-    if (replacements.length === 0) {
-      fail('patches', `${name} names no replacement, so it changes no byte`);
-    }
-    const text = readFileSync(target, 'utf8');
-    for (const replacement of replacements) {
-      if (replacement.find === '') {
-        fail('patches', `${name} spells a file whole in its replacement, and the take writes no file from nothing`);
-      }
-      const found = text.split(replacement.find).length - 1;
-      if (found === 1) continue;
-      const removed = replacement.replace === '';
-      if (removed && declaration.retains === undefined) {
-        fail(
-          'patches',
-          `${name} removes its anchor and names no \`retains\` text, so a spent anchor and a removed one look the same ` +
-            `in ${declaration.file} and nothing here could tell them apart`,
-        );
-      }
-      const retained = declaration.retains === undefined
-        ? null
-        : text.split(declaration.retains).length - 1;
-      const done = removed ? retained === 1 : text.split(replacement.replace).length - 1 === 1;
-      if (found === 0 && done) {
-        already += 1;
-        continue;
-      }
-      fail(
-        'patches',
-        `${name} finds its anchor ${found} time(s) in ${declaration.file} and its replaced text ${done ? (removed ? 'stands removed' : 'once') : 'not at all'}; ` +
-          (retained === 0
-            ? `the file no longer carries the text this patch leaves standing, so the anchor is spent and the declaration names nothing`
-            : 'the anchor is spent, so the declaration no longer names where in that file it acts'),
-      );
-    }
-  }
-  process.stdout.write(
-    `[run-chain] patches: ${landed} declaration(s) over the taken trees, ${already} of them already in place, ` +
-      `${replayed} replayed over the landed MiniApp copy\n`,
-  );
-}
-
 const RELEASE_ARTIFACTS = [
   {
     name: 'mobile-web',
-    producer: ['run', 'prepare:mobile-web'],
-    produces: 'obf/src/mobile-web/dist',
+    package: 'obf/src/mobile-web',
+    producer: ['run', 'build'],
+    produces: 'dist',
   },
   {
     name: 'extension-host',
-    producer: ['run', 'plugin-host:build'],
-    install: ['run', 'plugin-host:install'],
-    produces: 'obf/src/apps/extension-host/dist/extension-host.js',
+    package: 'obf/src/apps/extension-host',
+    producer: ['run', 'build'],
+    produces: 'dist/extension-host.js',
   },
   {
     name: 'ppt-live',
-    producer: ['exec', 'src/crates/contracts/product-domains/src/miniapp/builtin/assets/ppt-live/build-openbitfun.mjs'],
-    produces: 'obf/src/crates/contracts/product-domains/src/miniapp/builtin/assets/ppt-live/dist/ui.bundle.js',
+    package: 'obf/src/crates/contracts/product-domains/src/miniapp/builtin/assets/ppt-live',
+    producer: ['exec', 'build-openbitfun.mjs'],
+    produces: 'dist/ui.bundle.js',
   },
 ];
 
 const ESBUILD_HOOK = `
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-const STORE = '${join(REPO_ROOT, 'obf', 'node_modules', '.pnpm').split('\\').join('/')}';
+const STORE = '${join(targetDir(), 'pnpm-store', 'virtual').split('\\').join('/')}';
+const MODULES = '${join(REPO_ROOT, 'node_modules').split('\\').join('/')}';
+const LOCKS = '${join(REPO_ROOT, 'pnpm-lock.yaml').split('\\').join('/')}';
+function lockedVersion() {
+  if (!existsSync(LOCKS)) return null;
+  const line = readFileSync(LOCKS, 'utf8').split(/\\r?\\n/).find((row) => /^\\s{2}esbuild@/.test(row) || /esbuild@\\d/.test(row));
+  const found = line === undefined ? null : line.match(/esbuild@(\\d+\\.\\d+\\.\\d+)/);
+  return found === null ? null : found[1];
+}
 export async function resolve(specifier, context, next) {
   if (specifier === 'esbuild') {
+    const version = lockedVersion();
+    if (version !== null) {
+      const entry = MODULES + '/.pnpm/esbuild@' + version + '/node_modules/esbuild/lib/main.js';
+      if (existsSync(entry)) return { url: pathToFileURL(entry).href, shortCircuit: true };
+    }
     let versions = [];
     try { versions = readdirSync(STORE).filter((d) => d.startsWith('esbuild@')).sort().reverse(); } catch { versions = []; }
-    for (const version of versions) {
-      const entry = STORE + '/' + version + '/node_modules/esbuild/lib/main.js';
+    for (const held of versions) {
+      const entry = STORE + '/' + held + '/node_modules/esbuild/lib/main.js';
       if (existsSync(entry)) return { url: pathToFileURL(entry).href, shortCircuit: true };
     }
   }
@@ -256,117 +168,93 @@ function esbuildRegister() {
   return `data:text/javascript,import { register } from 'node:module'; register(${JSON.stringify(pathToFileURL(file).href)});`;
 }
 
-const SHELL_FACE_FILES = ['src-tauri/tauri.conf.json'];
+const BUILD_BENCH = 'lvpa-build-bench';
 
 function install() {
   const projects = absorbedProjects();
   for (const project of projects) {
     const manifest = packageManifestPath(project);
     if (manifest !== '') {
-      const path = join(projectRoot(project), ...manifest.split('/'));
+      const path = hostDerivedPath(project);
       if (!existsSync(path)) {
         fail('install', `${path} is not on disk, so the tree ${project.id} declares has no manifest to read`);
       }
     }
     for (const name of buildConfigFiles(project)) {
-      if (SHELL_FACE_FILES.includes(name)) continue;
       const path = join(projectRoot(project), ...name.split('/'));
-      if (!existsSync(path)) {
-        fail('install', `${path} is not on disk, and ${project.id} names it as a build input`);
-      }
+      if (existsSync(path)) continue;
+      if (name.endsWith('build.rs')) continue;
+      fail('install', `${path} is not on disk, and ${project.id} names it as a build input`);
     }
   }
-  run(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['install', '--frozen-lockfile'], 'install');
-  const obfRoot = join(REPO_ROOT, 'obf');
-  const needsReleaseLayer = RELEASE_ARTIFACTS.some((artifact) => !existsSync(join(REPO_ROOT, ...artifact.produces.split('/'))));
-  if (needsReleaseLayer && !existsSync(join(obfRoot, 'node_modules'))) {
-    const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-    const installed = spawnSync(pnpm, ['install', '--ignore-workspace', '--lockfile=false'], {
-      cwd: obfRoot,
-      stdio: 'inherit',
-      shell: pnpm.endsWith('.cmd'),
-    });
-    if (installed.status !== 0) {
-      fail(
-        'install',
-        `pnpm install --ignore-workspace exited ${installed.status} under ${obfRoot}, and the release layer's producers ` +
-          'read that package set, so the three artifacts this build embeds cannot be made',
-      );
-    }
-  }
+  const outside = join(targetDir(), 'pnpm-store');
+  mkdirSync(outside, { recursive: true });
+  const environment = { ...process.env, npm_config_store_dir: outside, PNPM_HOME: join(outside, 'home') };
+  run(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['install', '--frozen-lockfile'], 'install', environment);
+  const bench = join(targetDir(), BUILD_BENCH);
+  rmSync(bench, { recursive: true, force: true });
+  const command = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
   for (const artifact of RELEASE_ARTIFACTS) {
-    const produced = join(REPO_ROOT, ...artifact.produces.split('/'));
-    if (existsSync(produced)) continue;
+    const packageRoot = join(REPO_ROOT, ...artifact.package.split('/'));
+    const built = join(bench, ...artifact.package.split('/'));
+    copyInputs(packageRoot, built);
     const [kind, target] = artifact.producer;
-    const command = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-    if (artifact.install !== undefined) {
-      const [, installTarget] = artifact.install;
-      const prepared = spawnSync(command, [installTarget], { cwd: obfRoot, stdio: 'inherit', shell: command.endsWith('.cmd') });
-      if (prepared.status !== 0) {
-        fail(
-          'install',
-          `${artifact.name} needs its own dependency set, and pnpm ${installTarget} exited ${prepared.status} under ${obfRoot}`,
-        );
-      }
-    }
-    const result = kind === 'run'
-      ? spawnSync(command, [target], { cwd: obfRoot, stdio: 'inherit', shell: command.endsWith('.cmd') })
-      : spawnSync(
-        process.execPath,
-        ['--import', esbuildRegister(), join(obfRoot, ...target.split('/'))],
-        { cwd: obfRoot, stdio: 'inherit', shell: false },
-      );
-    if (result.status !== 0) {
+    const ran = kind === 'run'
+      ? spawnSync(command, ['-C', built, 'run', target], {
+        cwd: REPO_ROOT,
+        stdio: 'inherit',
+        shell: command.endsWith('.cmd'),
+        env: environment,
+      })
+      : spawnSync(process.execPath, ['--import', esbuildRegister(), join(built, ...target.split('/'))], {
+        cwd: built,
+        stdio: 'inherit',
+        shell: false,
+        env: environment,
+      });
+    if (ran.status !== 0) {
       fail(
         'install',
-        `${artifact.name} produced no ${artifact.produces}, and its producer ${kind === 'run' ? `pnpm ${target}` : target} ` +
-          `exited ${result.status} under ${obfRoot}; the release layer this build reads is not on disk`,
+        `${artifact.name} produced no ${artifact.produces}, and its producer ${kind === 'run' ? `pnpm run ${target}` : target} ` +
+          `exited ${ran.status} over ${built}; nothing is built inside an absorbed tree, so this step reads only the bench`,
       );
     }
+    const produced = join(built, ...artifact.produces.split('/'));
     if (!existsSync(produced)) {
-      fail('install', `${artifact.name} ran its producer and ${artifact.produces} still stands nowhere`);
-    }
-  }
-}
-
-const SHELL_DIRECTORIES = ['capabilities', 'icons', 'gen'];
-
-function deshellCrate(directory) {
-  const dropped = [];
-  const conf = join(directory, 'tauri.conf.json');
-  if (existsSync(conf)) {
-    rmSync(conf, { force: true });
-    dropped.push('tauri.conf.json');
-  }
-  for (const name of SHELL_DIRECTORIES) {
-    const path = join(directory, name);
-    if (!existsSync(path)) continue;
-    rmSync(path, { recursive: true, force: true });
-    dropped.push(`${name}/`);
-  }
-  return dropped;
-}
-
-function deshell() {
-  const projects = absorbedProjects();
-  for (const project of projects) {
-    const directory = packageDirectoryPath(project);
-    const dropped = deshellCrate(directory);
-    if (dropped.length > 0) {
-      process.stdout.write(
-        `[run-chain] deshell: ${project.id} carries no Tauri shell in the mirror workspace; dropped ${dropped.join(', ')}\n`,
-      );
-    }
-    const build = join(directory, 'build.rs');
-    if (existsSync(build) && /tauri_build/.test(readFileSync(build, 'utf8'))) {
       fail(
-        'deshell',
-        `${build} still names tauri_build; the shell's build block is declared in patches/ and this step does not write ` +
-          'that file, so the patches step has to run against it first',
+        'install',
+        `${artifact.name} ran its producer over ${built} and ${artifact.produces} stands nowhere there, so the release ` +
+          'layer this build reads is not on disk',
       );
     }
   }
-  process.stdout.write(`[run-chain] deshell: no member directory carries tauri.conf.json, capabilities/, icons/, gen/, or a tauri_build call\n`);
+}
+
+const INPUT_SKIP = new Set(['node_modules', 'dist', 'build', 'target', '.turbo', 'coverage', '.git']);
+
+function copyInputs(from, into) {
+  if (!existsSync(from)) {
+    fail('install', `${from} is not on disk, and it is the package whose build this step reads`);
+  }
+  rmSync(into, { recursive: true, force: true });
+  const walk = (at, to) => {
+    mkdirSync(to, { recursive: true });
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      if (INPUT_SKIP.has(entry.name) || entry.name.startsWith('.vite')) continue;
+      const source = join(at, entry.name);
+      const destination = join(to, entry.name);
+      if (entry.isDirectory()) {
+        walk(source, destination);
+        continue;
+      }
+      if (entry.isFile()) cpSync(source, destination);
+    }
+  };
+  walk(from, into);
+}
+
+function relativeToRepo(dir) {
+  return dir.slice(REPO_ROOT.length + 1).split('\\').join('/');
 }
 
 function frontend() {
@@ -375,24 +263,253 @@ function frontend() {
 
 function shell() {
   const cli = tauriCli();
-  const conf = join(SHELL_CRATE, 'tauri.conf.json');
-  if (!existsSync(conf)) {
-    fail('dev', `${conf} is not on disk, so there is no shell to start`);
+  if (!existsSync(TAURI_CONF)) {
+    fail('dev', `${TAURI_CONF} is not on disk, so the take has landed no shell face and there is none to start`);
   }
-  return { cli, conf, project: SHELL_CRATE };
+  return { cli, conf: TAURI_CONF };
+}
+
+const READERS = new Map([
+  ['upstream', (id) => {
+    const project = absorbedProjects().find((candidate) => candidate.id === id);
+    if (project === undefined) return `${id} is no declared absorbed tree, so nothing is taken into it`;
+    return existsSync(join(REPO_ROOT, ...project.root.split('/')))
+      ? null
+      : `no run has taken ${project.root} yet, and this step reads the tree the take lands`;
+  }],
+  ['root', (path) => (existsSync(join(REPO_ROOT, ...path.split('/')))
+    ? null
+    : `${path} stands nowhere at the repository root, and this step reads the one copy there is`)],
+  ['tree', (path) => READERS.get('upstream')(absorbedProjects().find((candidate) => candidate.root === path)?.id ?? path)],
+  ['target', (path) => (existsSync(join(targetDir(), ...path.split('/')))
+    ? null
+    : `${path} stands nowhere under ${targetDir()}, and this step reads what the build leaves there`)],
+  ['member', (path) => {
+    const [root, ...rest] = path.split('/');
+    const project = absorbedProjects().find((candidate) => candidate.root === root);
+    if (project === undefined) return `${path} names no absorbed tree, and this step reads the crate it stands for`;
+    const crate = rest.length === 0
+      ? join(packageDirectoryPath(project), 'Cargo.toml')
+      : join(projectRoot(project), ...rest, 'Cargo.toml');
+    if (!existsSync(crate)) return `${path} carries no Cargo.toml, and this step reads the crate it stands for`;
+    try {
+      parseToml(readFileSync(crate, 'utf8'));
+    } catch (error) {
+      return `${crate} does not read as TOML (${error.message}), and this step reads the crate it stands for`;
+    }
+    return null;
+  }],
+]);
+
+const SENTINEL = '# [upstream-sync]';
+
+function segments(text) {
+  const held = new Map();
+  let open = null;
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith(SENTINEL)) continue;
+    const body = trimmed.slice(SENTINEL.length).trim();
+    if (body.endsWith(' end')) {
+      if (open !== null && `${open.head} end` === body) {
+        held.set(open.head, open.lines.join('\n'));
+        open = null;
+      }
+      continue;
+    }
+    if (open === null) open = { head: body, lines: [] };
+  }
+  return held;
+}
+
+function held() {
+  const host = readFileSync(join(REPO_ROOT, 'Cargo.toml'), 'utf8');
+  const frontend = readFileSync(join(REPO_ROOT, 'pnpm-workspace.yaml'), 'utf8');
+  const attributes = readFileSync(join(REPO_ROOT, '.gitattributes'), 'utf8');
+  const payload = payloadDeclaration();
+  const landed = readFileSync(join(resolveLanding(payload), 'meta.json'), 'utf8');
+  const all = new Map([...segments(host), ...segments(frontend), ...segments(attributes), ...segments(landed)]);
+  if (all.size === 0) {
+    return null;
+  }
+  return all;
+}
+
+function before(step, leaves) {
+  const was = new Map();
+  for (const leaf of leaves) {
+    const stands = STANDS.get(leaf.split(':')[0]);
+    const seen = stands === undefined ? null : stands(leaf.split(':')[1] ?? '');
+    if (seen === null) {
+      fail(step, `${step} names ${leaf}, and this runner holds no reader that could say whether that stands`);
+    }
+    was.set(leaf, seen);
+  }
+  return was;
+}
+
+function leavesOf(step, guarantees) {
+  const read = guarantees.get(step);
+  if (read === undefined) {
+    fail(step, `the shape declares no guarantee for ${step}, so this runner cannot say what ${step} refuses and what it leaves`);
+  }
+  return read;
 }
 
 function guard(step, guarantees) {
-  const held = guarantees.get(step);
-  if (held === undefined) {
-    fail(step, `the shape declares no guarantee for ${step}, so this runner cannot say what ${step} refuses`);
-  }
-  for (const required of held.onDisk) {
-    const path = join(REPO_ROOT, ...required.split('/'));
-    if (!existsSync(path)) {
-      fail(step, `${step} refuses to run until ${required} stands on disk, and ${path} is not there`);
+  for (const input of leavesOf(step, guarantees).onDisk) {
+    const [kind, ...rest] = input.split(':');
+    const reader = READERS.get(rest.length === 0 ? 'root' : kind);
+    if (reader === undefined) {
+      fail(step, `${step} names ${input}, and this runner holds no reader that could say whether that stands`);
     }
+    const said = reader(rest.length === 0 ? kind : rest.join(':'));
+    if (said !== null) fail(step, `${step} refuses to run: ${said}`);
   }
+}
+
+function landed(step, leaves, was) {
+  if (leaves.length === 0) {
+    fail(step, `${step} declares nothing it leaves behind, so this pass cannot tell the step having run from it not having run`);
+  }
+  const changed = [];
+  for (const leaf of leaves) {
+    const stands = STANDS.get(leaf.split(':')[0]);
+    const now = stands === undefined ? null : stands(leaf.split(':')[1] ?? '');
+    if (now === null) {
+      fail(step, `${step} names ${leaf} as what it leaves, and this runner holds no reader for it, so this step cannot be told to have run`);
+    }
+    if (now !== was.get(leaf)) changed.push(leaf);
+  }
+  if (changed.length === 0) {
+    fail(step, `${step} ran and left no mark on what it declares it leaves (${leaves.join(', ')}), so this pass leaves the disk as it found it and shows no sign of the step having run`);
+  }
+  return changed;
+}
+
+function spoken(step, ahead) {
+  const now = held();
+  if (now === null) {
+    fail(step, `${step} ran and Cargo.toml, pnpm-workspace.yaml and the landed copy carry no line a step of this chain states, so this pass cannot tell its having run from its not having run`);
+  }
+  for (const [head, body] of ahead) {
+    if (now.get(head) !== body) return head;
+  }
+  fail(
+    step,
+    `${step} ran and the lines it states read as the ones that stood before it (${[...ahead.keys()].join('; ')}), so this pass ` +
+      'cannot tell its having run from its not having run',
+  );
+}
+
+const STANDS = new Map([
+  ['root', (path) => (path.endsWith('/') ? treeAt(join(REPO_ROOT, ...path.split('/').filter((part) => part !== ''))) : null)],
+  ['tree', (path) => {
+    const project = absorbedProjects().find((candidate) => candidate.root === path);
+    return project === undefined ? null : treeAt(projectRoot(project));
+  }],
+  ['target', (path) => treeAt(join(targetDir(), ...path.split('/')))],
+  ['member', (path) => {
+    const [root, ...rest] = path.split('/');
+    const project = absorbedProjects().find((candidate) => candidate.root === root);
+    if (project === undefined) return null;
+    const directory = rest.length === 0 ? packageDirectoryPath(project) : join(projectRoot(project), ...rest);
+    const manifest = directoryReads(directory);
+    if (manifest === null) return null;
+    const kept = manifest.split(/\r?\n/).filter((row) => !/^\s*tauri\.conf\.json\s*$/.test(row)).join('\n');
+    return segments(kept).length === 0 ? 'the manifest carries no workspace segment' : kept;
+  }],
+  ['miniapp', (path) => {
+    if (path !== '') return null;
+    try {
+      const payload = payloadDeclaration();
+      return segments(readFileSync(join(resolveLanding(payload), 'meta.json'), 'utf8')).length === 0
+        ? 'the landed copy carries no segment'
+        : `${resolveLanding(payload)}`;
+    } catch (error) {
+      return `unreadable: ${error.message}`;
+    }
+  }],
+]);
+
+function treeAt(directory) {
+  const manifests = [];
+  const walk = (at) => {
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      if (entry.name === 'node_modules') continue;
+      const path = join(at, entry.name);
+      if (entry.isDirectory()) {
+        walk(path);
+        continue;
+      }
+      if (entry.isFile() && entry.name === 'Cargo.toml') manifests.push(path);
+    }
+  };
+  walk(directory);
+  return manifests.length === 0 ? null : `${manifests.length}:${createHash('sha256').update(manifests.sort().join('\n')).digest('hex')}`;
+}
+
+function directoryReads(directory) {
+  for (const name of ['Cargo.toml', 'manifest.json', 'package.json']) {
+    const path = join(directory, name);
+    if (existsSync(path)) return readFileSync(path, 'utf8');
+  }
+  return null;
+}
+
+function settle(command) {
+  const seamRecordDir = join(targetDir(), 'lvpa-seam-run');
+  if (existsSync(seamRecordDir) && readdirSync(seamRecordDir).length > 0) {
+    fail(command, `${seamRecordDir} still holds a record, so a wrapper pass left its injection standing`);
+  }
+}
+
+function bundleStands(step) {
+  const dir = bundleDir();
+  const held = existsSync(dir) ? readdirSync(dir) : [];
+  if (held.length === 0) {
+    fail(step, `${dir} holds no installer, so this pass left no product on disk`);
+  }
+}
+
+async function launch(command) {
+  const { cli, conf } = shell();
+  if (!existsSync(cli)) {
+    fail(command, `${cli} is not on disk, so this chain has no tauri to start`);
+  }
+  const binary = wrapperBinary();
+  if (!existsSync(binary)) {
+    fail(command, `${binary} is not on disk, so this pass would compile with the system compiler`);
+  }
+  const { path } = shellConfig();
+  if (path !== rootConfigPath()) {
+    fail(command, `the shell face was written to ${path} and this pass hands tauri ${rootConfigPath()}`);
+  }
+  const carrier = wrapperArguments();
+  let code;
+  let error;
+  let log;
+  try {
+    ({ code, error, log } = await LAUNCHERS[command](path, carrier));
+  } catch (caught) {
+    removeRootConfig();
+    throw caught;
+  }
+  if (code !== 0) {
+    removeRootConfig();
+    const named = /could not compile `([^`]+)`/.exec(log)?.[1];
+    const detail = error ?? (named === undefined ? null : probeCompiler(named, carrier));
+    fail(
+      command,
+      `tauri ${command} exited ${code} over ${conf}` +
+        (detail === null
+          ? ', and neither its output nor a rebuild of the crate it named carried an error[...] line'
+          : `:\n${detail}`),
+    );
+  }
+  removeRootConfig();
+  settle(command);
+  if (command === 'build') bundleStands(command);
 }
 
 function dev() {
@@ -404,8 +521,8 @@ function build() {
 }
 
 const LAUNCHERS = {
-  dev: () => runTauriToExit('dev'),
-  build: () => runTauriToExit('build'),
+  dev: (path, carrier) => runTauriToExit('dev', path, carrier),
+  build: (path, carrier) => runTauriToExit('build', path, carrier),
 };
 
 function retireSeamRecords() {
@@ -432,41 +549,45 @@ function sweepOnce() {
 }
 process.on('exit', sweepOnce);
 
-async function launch(command) {
-  const { cli, conf, project } = shell();
-  if (!existsSync(cli)) {
-    fail(command, `${cli} is not on disk, so this chain has no tauri to start`);
-  }
-  if (!existsSync(conf)) {
-    fail(command, `${conf} is not on disk, so there is no shell to start`);
-  }
-  process.stdout.write(`[run-chain] ${command}: ${cli} runs ${command} over ${project}, out of ${REPO_ROOT}\n`);
-  const { code, error, log } = await LAUNCHERS[command]();
-  if (code !== 0) {
-    const named = /could not compile `([^`]+)`/.exec(log)?.[1];
-    const detail = error ?? (named === undefined ? null : probeCompiler(named));
-    fail(
-      command,
-      `tauri ${command} exited ${code} over ${project}` +
-        (detail === null
-          ? ', and neither its output nor a rebuild of the crate it named carried an error[...] line'
-          : `:\n${detail}`),
-    );
-  }
+const ORDER = [...chainOrder('dev'), ...chainOrder('build')].filter(
+  (name, index, all) => all.indexOf(name) === index,
+);
+
+const RECIPES = [wrapper, absorb, absorb, merge, stripStep, deshellStep, seam, patches, install, frontend, dev, build];
+
+if (RECIPES.length !== ORDER.length) {
+  process.stderr.write(
+    `[run-chain] the runner carries ${RECIPES.length} recipe(s) and the shape names ${ORDER.length} step(s), ` +
+      'so a recipe would answer to the wrong step name\n',
+  );
+  process.exit(1);
 }
 
-const STEPS = { wrapper, take, absorb, merge, strip, deshell, seam, patches, install, frontend, dev, build };
+function recipe(named) {
+  const at = ORDER.indexOf(named);
+  return at === -1 ? undefined : RECIPES[at];
+}
+
+const STATED = new Set(['take', 'absorb', 'merge', 'frontend']);
+
+async function runStep(name, guarantees) {
+  guard(name, guarantees);
+  const leaves = leavesOf(name, guarantees).leaves;
+  const was = before(name, leaves);
+  const ahead = STATED.has(name) ? held() : null;
+  await recipe(name)();
+  const changed = landed(name, leaves, was);
+  const spokenHere = ahead === null ? null : spoken(name, ahead);
+  process.stdout.write(
+    `[run-chain] ${name}: the pass left ${changed.join(', ')}` + (spokenHere === null ? '\n' : `; it states its lines at ${spokenHere}\n`),
+  );
+}
 
 export async function runChain(entrance) {
   const ordered = chainOrder(entrance);
   const guarantees = chainGuarantees(entrance);
   for (const name of ordered) {
-    const step = STEPS[name];
-    if (!step) {
-      fail(name, `${name} is not a step this runner carries`);
-    }
-    guard(name, guarantees);
-    await step();
+    await runStep(name, guarantees);
   }
   return ordered;
 }
@@ -478,15 +599,32 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   } else if (requested.length === 2 && requested[0] === 'order') {
     process.stdout.write(`${chainOrder(requested[1]).join('\n')}\n`);
   } else if (requested.length === 1) {
-    const step = STEPS[requested[0]];
-    if (!step) {
+    if (!recipe(requested[0])) {
       process.stderr.write(
-        `[run-chain] ${requested[0]} is not a step in the chain (${Object.keys(STEPS).join(', ')}); name one, or name order with an entrance\n`,
+        `[run-chain] ${requested[0]} is not a step in the chain (${ORDER.join(', ')}); name one, or name order with an entrance\n`,
       );
       process.exit(2);
     }
-    guard(requested[0], chainGuarantees('dev'));
-    await step();
+    await runStep(requested[0], chainGuarantees('dev'));
+  } else if (requested.length === 2 && requested[0] === 'step') {
+    if (!recipe(requested[1])) {
+      process.stderr.write(
+        `[run-chain] ${requested[1]} is not a step in the chain (${ORDER.join(', ')})\n`,
+      );
+      process.exit(2);
+    }
+    await runStep(requested[1], chainGuarantees('dev'));
+  } else if (requested.length === 2 && requested[0] === 'land') {
+    if (!recipe(requested[1])) {
+      process.stderr.write(
+        `[run-chain] ${requested[1]} is not a step in the chain (${ORDER.join(', ')})\n`,
+      );
+      process.exit(2);
+    }
+    const guarantees = chainGuarantees('dev');
+    const leaves = leavesOf(requested[1], guarantees).leaves;
+    const changed = landed(requested[1], leaves, before(requested[1], leaves));
+    process.stdout.write(`${requested[1]} left ${changed.join(', ')}\n`);
   } else {
     process.stderr.write('[run-chain] name one step, or `order dev` / `order build` to list one entrance\n');
     process.exit(2);

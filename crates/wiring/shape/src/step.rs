@@ -52,20 +52,19 @@ impl Step {
     pub fn guarantee(self) -> Guarantee {
         match self {
             Step::Wrapper => Guarantee {
-                on_disk: &[".cargo/", "crates/wiring/", "patches/"],
-                refuses_when: "wrapper 与其余扩展机制未落位时拒绝进入编译",
+                on_disk: &["crates/wiring/", "patches/"],
+                leaves: &["target:lvpa-rustc-wrapper", "target:lvpa-capability-panorama"],
             },
             Step::Take => Guarantee {
                 on_disk: &[
-                    "obf/",
-                    "openalgo-desktop/",
+                    "upstream:obf",
+                    "upstream:openalgo-desktop",
                     "Cargo.toml",
                     "Cargo.lock",
                     "pnpm-workspace.yaml",
                     "pnpm-lock.yaml",
-                    ".openlvpa/",
                 ],
-                refuses_when: "取入的树内有 workspace 声明待合或树内原件未删净时拒绝收下这棵树",
+                leaves: &["tree:obf", "tree:openalgo-desktop"],
             },
             Step::Absorb => Guarantee {
                 on_disk: &[
@@ -74,43 +73,48 @@ impl Step {
                     "pnpm-workspace.yaml",
                     "pnpm-lock.yaml",
                 ],
-                refuses_when: "树内任一条依赖、成员或锁定版本在仓根指不到时拒绝写定这一份",
+                leaves: &[
+                    "Cargo.toml",
+                    "Cargo.lock",
+                    "pnpm-workspace.yaml",
+                    "pnpm-lock.yaml",
+                ],
             },
             Step::Merge => Guarantee {
                 on_disk: &["Cargo.toml", "pnpm-workspace.yaml", ".gitattributes"],
-                refuses_when: "树内仍有能自行发声的声明原件未并入仓根时拒绝进入剥净",
+                leaves: &["Cargo.toml", "pnpm-workspace.yaml", ".gitattributes"],
             },
             Step::Strip => Guarantee {
-                on_disk: &["obf/", "openalgo-desktop/"],
-                refuses_when: "树内 vendor/ 下留有 workspace 声明或包管理根例外时拒绝继续",
+                on_disk: &["upstream:obf", "upstream:openalgo-desktop"],
+                leaves: &["tree:obf", "tree:openalgo-desktop"],
             },
             Step::Deshell => Guarantee {
-                on_disk: &["openalgo-desktop/src-tauri", "Cargo.toml"],
-                refuses_when: "摘完之后该目录里还有一处引用壳面时拒绝继续",
+                on_disk: &["upstream:obf", "upstream:openalgo-desktop"],
+                leaves: &["member:openalgo-desktop"],
             },
             Step::Seam => Guarantee {
                 on_disk: &["crates/seams/", "Cargo.toml"],
-                refuses_when: "接缝未按 crates/seams/<名>/ 落位或锚到行号、偏移、字节、具体实现、内部结构时拒绝接进树内件",
+                leaves: &["Cargo.toml"],
             },
             Step::Patches => Guarantee {
                 on_disk: &["patches/", "Cargo.toml"],
-                refuses_when: "取件的 find 与 replace 相同、或在目标件里零命中时拒绝套用",
+                leaves: &["Cargo.toml"],
             },
             Step::Install => Guarantee {
-                on_disk: &[".openlvpa/"],
-                refuses_when: "有吸收树被当作 workspace 起点时拒绝安装",
+                on_disk: &["Cargo.toml", "Cargo.lock", "pnpm-workspace.yaml", "pnpm-lock.yaml"],
+                leaves: &["target:lvpa-build-bench", "target:pnpm-store"],
             },
             Step::Frontend => Guarantee {
-                on_disk: &["pnpm-workspace.yaml", "pnpm-lock.yaml", "patches/"],
-                refuses_when: "第二个前端壳出现，或 openalgo-desktop 的前端占成员闭包、其 src-tauri 壳未去时拒绝继续",
+                on_disk: &["pnpm-workspace.yaml", "pnpm-lock.yaml", "patches/", "target:lvpa-build-bench"],
+                leaves: &["miniapp:"],
             },
             Step::Dev => Guarantee {
-                on_disk: &[".openlvpa/", "crates/"],
-                refuses_when: "链上每步未各自成立时拒绝启动",
+                on_disk: &["crates/"],
+                leaves: &["root:.openlvpa/"],
             },
             Step::Build => Guarantee {
-                on_disk: &[".openlvpa/"],
-                refuses_when: "吸收树内有编译发生时拒绝出包",
+                on_disk: &["crates/"],
+                leaves: &["root:.openlvpa/", "target:release/bundle"],
             },
         }
     }
@@ -118,5 +122,5 @@ impl Step {
 
 pub struct Guarantee {
     pub on_disk: &'static [&'static str],
-    pub refuses_when: &'static str,
+    pub leaves: &'static [&'static str],
 }
