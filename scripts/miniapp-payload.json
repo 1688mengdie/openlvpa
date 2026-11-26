@@ -1,7 +1,7 @@
 {
-  "_comment": "Where an absorbed tree's frontend stands inside the tree and where it lands in the user's OpenBitFun data directory. The landing point is the host's own answer rather than a path written here: `obf/src/crates/assembly/core/src/infrastructure/app_paths/path_manager.rs` spells it as `user_data_dir().join(\"miniapps\")`, and `user_data_dir` is `user_root().join(\"data\")`, where `user_root` is `%APPDATA%\\openbitfun` on Windows, `~/Library/Application Support/openbitfun` on macOS and `~/.config/openbitfun` elsewhere, overridable by `OPENBITFUN_USER_ROOT`. The patch set replayed over the landed copy is not listed here: each file under `patches/` states its own `file`, and that is the single place a patch is declared.",
+  "_comment": "The frontend that is landed as a MiniApp. `source` is the absorbed tree, and `root` is where inside it that frontend stands; the identity card is the MiniApp's own account of it. The landing point is the host's own answer rather than a path written here: `obf/src/crates/assembly/core/src/infrastructure/app_paths/path_manager.rs` spells it as `user_data_dir().join(\"miniapps\")`, and `user_data_dir` is `user_root().join(\"data\")`, where `user_root` is `%APPDATA%\\openbitfun` on Windows, `~/Library/Application Support/openbitfun` on macOS and `~/.config/openbitfun` elsewhere, overridable by `OPENBITFUN_USER_ROOT`. The patch set replayed over the landed copy is not listed here: each file under `patches/` states its own `file`, and that is the single place a patch is declared. No other tree's frontend is landed, so a tree that joined this one has nowhere to put it.",
+  "source": "openalgo-desktop",
+  "root": ".",
   "appId": "openalgo-desktop",
-  "routes": "src/main.tsx",
-  "styles": "src/index.css",
-  "index": "index.html"
+  "language": "zh"
 }

@@ -3,16 +3,19 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { REPO_ROOT, absorbedProjects, frontendRoots, projectRoot } from './absorbed-sources.mjs';
+import { REPO_ROOT, absorbedProjects, buildConfigFiles, frontendMembership, frontendRoots, projectRoot, strippedAbsence } from './absorbed-sources.mjs';
 import { targetPath } from './target-dir.mjs';
 
 const DECLARATION = join(REPO_ROOT, 'scripts', 'miniapp-payload.json');
 const PATCH_DIR = join(REPO_ROOT, 'patches');
+export const PATCH_SUFFIX = '.patch.json';
+export const LANDINGS = Object.freeze(['frontend', 'member', 'create']);
 const TREE_RUNTIME = 'obf/src/apps/miniapp-shell';
-
-const SOURCE_NAMES = ['index.html', 'style.css', 'ui.js', 'worker.js', 'esm_dependencies.json'];
+const I18N_MODULE = 'src/i18n/index.ts';
 
 const BUILT_APP_DIR = 'app';
+
+const WORKSPACE_ESCAPES = ['--ignore-workspace', '--lockfile=false', '--no-lockfile'];
 
 export function fail(message) {
   process.stderr.write(`[sync-openalgo-frontend] ${message}\n`);
@@ -23,62 +26,120 @@ function pnpm() {
   return process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 }
 
+function pnpmIn(dir, args, why) {
+  const escaped = args.find((arg) => WORKSPACE_ESCAPES.includes(arg));
+  if (escaped !== undefined) {
+    fail(`${why} would pass ${escaped} in ${dir}, and there is one member list, one dependency set and one lock at the repository root`);
+  }
+  const ran = spawnSync(pnpm(), args, {
+    cwd: dir,
+    stdio: 'inherit',
+    shell: pnpm().endsWith('.cmd'),
+    env: { ...process.env, NODE_ENV: 'production' },
+  });
+  if (ran.status !== 0) {
+    fail(`${why} exited ${ran.status} under ${dir}`);
+  }
+}
+
 export function payloadDeclaration() {
   if (!existsSync(DECLARATION)) {
     fail(`the payload declaration is missing: ${DECLARATION}`);
   }
   const payload = JSON.parse(readFileSync(DECLARATION, 'utf8'));
-  for (const key of ['appId', 'routes', 'styles', 'index']) {
+  for (const key of ['appId', 'source', 'root', 'language']) {
     if (typeof payload[key] !== 'string' || payload[key] === '') {
       fail(`${DECLARATION} names no \`${key}\`, so the landed MiniApp would carry an incomplete identity card`);
     }
   }
-  const extra = Object.keys(payload).filter((key) => !['_comment', 'appId', 'routes', 'styles', 'index'].includes(key));
+  if (payload.language !== 'zh') {
+    fail(`${DECLARATION} names \`language\` as ${JSON.stringify(payload.language)}, and a word table replayed over the landed copy states one language`);
+  }
+  const extra = Object.keys(payload).filter((key) => !['_comment', 'appId', 'source', 'root', 'language'].includes(key));
   if (extra.length > 0) {
     fail(`${DECLARATION} carries ${extra.join(', ')}, and a patch states itself in patches/ rather than a second time here`);
   }
   return payload;
 }
 
-export function payloadProjects(payload) {
-  const declared = absorbedProjects();
-  const entries = [];
-  const covered = new Set();
-  for (const project of declared) {
-    if (frontendRoots(project).every((root) => root.membership !== 'mini-app-payload')) continue;
-    if (covered.has(project.id)) continue;
-    covered.add(project.id);
-    entries.push({ project, entry: { routes: payload.routes, styles: payload.styles, index: payload.index } });
+export function payloadProject(payload) {
+  const project = absorbedProjects().find((entry) => entry.id === payload.source);
+  if (project === undefined) {
+    fail(`${DECLARATION} names \`source\` as ${JSON.stringify(payload.source)}, and no absorbed tree is declared under that id`);
   }
-  for (const project of declared) {
-    if (covered.has(project.id)) continue;
-    if (frontendRoots(project).some((root) => root.membership === 'mini-app-payload')) {
-      fail(`${project.id} declares a \`mini-app-payload\` frontend root and no entry names it`);
-    }
+  if (!frontendRoots(project).includes(payload.root)) {
+    fail(
+      `${project.id} names no frontend root ${JSON.stringify(payload.root)} among ${frontendRoots(project).join(', ')}, ` +
+        'so the payload would be landed from a place that tree does not carry',
+    );
   }
-  if (entries.length === 0) {
-    fail(`${DECLARATION} names a payload and no absorbed tree declares a \`mini-app-payload\` frontend root to fill it`);
+  if (frontendMembership(project, payload.root) !== 'mini-app-payload') {
+    fail(
+      `${project.id} declares ${JSON.stringify(payload.root)} as ${frontendMembership(project, payload.root)}, and ${DECLARATION} ` +
+        'lands that root as the MiniApp: one root has one destination',
+    );
   }
-  return entries;
+  return project;
+}
+
+export function payloadRootPath(project, payload) {
+  const root = projectRoot(project);
+  return payload.root === '.' ? root : join(root, ...payload.root.split('/'));
+}
+
+export function patchFiles() {
+  if (!existsSync(PATCH_DIR)) return [];
+  const names = readdirSync(PATCH_DIR).sort();
+  const stray = names.filter((name) => name.endsWith('.json') && !name.endsWith(PATCH_SUFFIX));
+  if (stray.length > 0) {
+    fail(
+      `patches/ carries ${stray.join(', ')} as .json and not as ${PATCH_SUFFIX}: a patch is written one way in one ` +
+        'directory, so a name this chain does not read is a patch that stands where nothing applies it',
+    );
+  }
+  return names.filter((name) => name.endsWith(PATCH_SUFFIX)).map((name) => join(PATCH_DIR, name));
+}
+
+function landingHead(path, patch) {
+  if (typeof patch.landed !== 'string' || patch.landed === '') {
+    fail(`${path} carries no \`landed\`, so nothing says which landing applies it`);
+  }
+  const head = patch.landed.split(':')[0].trim();
+  if (!LANDINGS.includes(head)) {
+    fail(
+      `${path} says it lands as ${JSON.stringify(patch.landed)}, and a patch lands as ${LANDINGS.join(' or ')}: ` +
+        'one patch has one place it is applied at',
+    );
+  }
+  return head;
+}
+
+function readPatch(path) {
+  let patch;
+  try {
+    patch = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    fail(`${path} does not read as JSON (${error.message}), so nothing says which copy it changes`);
+  }
+  if (typeof patch.file !== 'string' || patch.file === '') {
+    fail(`${path} names no \`file\`, so nothing says which copy it changes`);
+  }
+  return { path, patch, landing: landingHead(path, patch) };
 }
 
 export function declaredPatches(project) {
   const patches = [];
-  for (const name of readdirSync(PATCH_DIR).sort()) {
-    if (!name.endsWith('.patch.json')) continue;
-    const path = join(PATCH_DIR, name);
-    const patch = JSON.parse(readFileSync(path, 'utf8'));
-    if (typeof patch.file !== 'string' || patch.file === '') {
-      fail(`${path} names no \`file\`, so nothing says which copy it is replayed over`);
-    }
-    if (patch.landed === undefined) continue;
-    if (typeof patch.landed !== 'string' || patch.landed === '') {
-      fail(`${path} carries \`landed\` that says nothing, and a patch replayed over the landed copy says so in words`);
-    }
-    if (patch.file.split('/')[0] !== project.root) continue;
-    patches.push({ name, path, patch });
+  for (const path of patchFiles()) {
+    const held = readPatch(path);
+    if (held.patch.file.split('/')[0] !== project.root) continue;
+    if (held.landing !== 'frontend') continue;
+    patches.push({ name: path.split(/[\\/]/).pop(), path, patch: held.patch });
   }
   return patches;
+}
+
+export function readPatchDeclarations() {
+  return patchFiles().map((path) => readPatch(path));
 }
 
 export function resolveLanding(payload) {
@@ -100,33 +161,29 @@ export function resolveLanding(payload) {
   return join(userRoot, 'data', 'miniapps', payload.appId);
 }
 
-export function landingFacts(entry) {
-  const root = projectRoot(entry.project);
+export function landingFacts(payload, project) {
+  const root = payloadRootPath(project, payload);
   const files = {};
-  for (const name of ['routes', 'styles', 'index']) {
-    const declared = entry.entry[name];
-    const path = join(root, ...declared.split('/'));
-    if (!existsSync(path)) {
-      fail(`${entry.project.id}: the taken tree carries no ${declared}, so the landed payload would have no ${name}`);
-    }
-    files[name] = path;
-  }
   for (const name of ['index.html', 'openscript-runner.html']) {
     const path = join(root, name);
-    if (existsSync(path)) files[name] = path;
+    if (!existsSync(path)) {
+      fail(`${project.id}: the taken tree carries no ${path}, so the landed copy would carry no ${name} for the host to open`);
+    }
+    files[name] = path;
   }
   return { root, files };
 }
 
-function projectSources(project, target) {
-  const root = projectRoot(project);
+function projectSources(project, root, target) {
   const source = join(root, 'src');
   if (!existsSync(source)) {
     fail(`${project.id}: the taken tree carries no ${source}, so the landed copy would carry no source for the patches to land on`);
   }
+  const face = shellFace(project);
   const projected = [];
   const walk = (dir, prefix) => {
     for (const entry of readdirSync(dir).sort()) {
+      if (prefix === 'src' && entry === face) continue;
       const full = join(dir, entry);
       const stat = statSync(full);
       const relative = `${prefix}/${entry}`;
@@ -144,10 +201,19 @@ function projectSources(project, target) {
   return projected;
 }
 
+function treeEntry(root, name, target) {
+  const path = join(root, ...name.split('/'));
+  if (!existsSync(path)) return false;
+  const destination = join(target, ...name.split('/'));
+  mkdirSync(join(destination, '..'), { recursive: true });
+  writeFileSync(destination, readFileSync(path));
+  return true;
+}
+
 function rootEntry(payload) {
   return [
     '<!doctype html>',
-    '<html lang="en">',
+    `<html lang="${payload.language}">`,
     '  <head>',
     '    <meta charset="UTF-8" />',
     '    <meta name="viewport" content="width=device-width, initial-scale=1.0" />',
@@ -214,8 +280,6 @@ function bootModule(payload) {
   ].join('\n');
 }
 
-const FRONTEND_WORKSPACE = 'lvpa-frontend';
-
 const FRONTEND_INPUTS = [
   'package.json',
   'vite.config.ts',
@@ -230,7 +294,15 @@ const FRONTEND_INPUTS = [
   'public',
 ];
 
-function copyFrontendInputs(from, into) {
+const INPUT_SKIP = new Set(['node_modules', 'dist', 'build', 'target', '.turbo', 'coverage', '.git', '.vite']);
+
+function shellFace(project) {
+  const absence = strippedAbsence(project);
+  return absence === null ? null : absence.segment('');
+}
+
+function copyFrontendInputs(project, from, into, skipped) {
+  const face = shellFace(project);
   for (const name of FRONTEND_INPUTS) {
     const source = join(from, name);
     if (!existsSync(source)) continue;
@@ -239,6 +311,8 @@ function copyFrontendInputs(from, into) {
       const walk = (at, to) => {
         mkdirSync(to, { recursive: true });
         for (const entry of readdirSync(at).sort()) {
+          if (INPUT_SKIP.has(entry) || (skipped !== null && skipped.includes(entry))) continue;
+          if (face !== null && entry === face) continue;
           const full = join(at, entry);
           const next = join(to, entry);
           if (statSync(full).isDirectory()) {
@@ -256,13 +330,24 @@ function copyFrontendInputs(from, into) {
   }
 }
 
-export function buildFrontend(project) {
-  const root = projectRoot(project);
+export function buildFrontend(project, payload) {
+  const root = payloadRootPath(project, payload);
+  if (frontendMembership(project, payload.root) !== 'mini-app-payload') {
+    fail(
+      `${project.id} declares its frontend root ${JSON.stringify(payload.root)} as ${frontendMembership(project, payload.root)}, ` +
+        'and a root this chain builds for the MiniApp is the one that is a payload',
+    );
+  }
   const manifest = join(root, 'package.json');
   if (!existsSync(manifest)) {
     fail(`${project.id}: the taken tree carries no ${manifest}, so nothing declares how its frontend is built`);
   }
-  const declared = JSON.parse(readFileSync(manifest, 'utf8'));
+  let declared;
+  try {
+    declared = JSON.parse(readFileSync(manifest, 'utf8'));
+  } catch (error) {
+    fail(`${project.id}: ${manifest} is not readable as JSON (${error.message}), so nothing says how its frontend is built`);
+  }
   const script = declared.scripts?.build;
   if (typeof script !== 'string' || script === '') {
     fail(`${project.id}: its package.json names no \`build\` script, so this chain cannot produce its frontend`);
@@ -297,44 +382,14 @@ export function buildFrontend(project) {
   if (settled === sourceKey && existsSync(join(workspace, 'dist', 'index.html'))) {
     process.stdout.write(
       `[sync-openalgo-frontend] ${project.id}: ${workspace} holds ${FRONTEND_INPUTS.join(', ')} built from the sources now on disk, ` +
-        'so this step neither copies, installs nor rebuilds\n',
+        'so this step neither copies nor rebuilds\n',
     );
     return join(workspace, 'dist');
   }
   rmSync(workspace, { recursive: true, force: true });
   mkdirSync(workspace, { recursive: true });
-  copyFrontendInputs(root, workspace);
-  const vite = join(workspace, 'node_modules', '.bin', process.platform === 'win32' ? 'vite.cmd' : 'vite');
-  const installed = spawnSync(
-    pnpm(),
-    [
-      'install',
-      '--ignore-workspace',
-      '--lockfile=false',
-      '--config.strict-dep-builds=false',
-      '--config.public-hoist-pattern=*',
-    ],
-    {
-      cwd: workspace,
-      stdio: 'inherit',
-      shell: pnpm().endsWith('.cmd'),
-    },
-  );
-  if (installed.status !== 0) {
-    fail(`${project.id}: pnpm install --ignore-workspace exited ${installed.status} under ${workspace}, and its \`build\` script needs that package set`);
-  }
-  if (!existsSync(vite)) {
-    fail(`${project.id}: ${vite} is not on disk after the install under ${workspace}, so this chain has no bundler to call`);
-  }
-  const built = spawnSync(vite, ['build'], {
-    cwd: workspace,
-    stdio: 'inherit',
-    shell: vite.endsWith('.cmd'),
-    env: { ...process.env, NODE_ENV: 'production' },
-  });
-  if (built.status !== 0) {
-    fail(`${project.id}: its \`${script}\` script exited ${built.status} under ${workspace}, so the landed payload would carry no static frontend`);
-  }
+  copyFrontendInputs(project, root, workspace, buildConfigFiles(project));
+  pnpmIn(workspace, ['exec', 'vite', 'build'], `${project.id}'s build`);
   const out = join(workspace, 'dist');
   if (!existsSync(join(out, 'index.html'))) {
     fail(`${project.id}: \`${script}\` finished and ${join(out, 'index.html')} stands nowhere, so the build wrote outside the place this chain reads`);
@@ -381,15 +436,16 @@ function copyBuiltApp(from, into) {
   return copied;
 }
 
-export function landBundle(payload, entry, target, built) {
-  const facts = landingFacts(entry);
+export function landBundle(payload, project, target, built) {
+  const facts = landingFacts(payload, project);
   if (existsSync(target)) rmSync(target, { recursive: true });
   mkdirSync(join(target, 'source'), { recursive: true });
 
   const bundle = join(target, 'source');
-  const projected = [...projectSources(entry.project, target), ...copyBuiltApp(built, bundle)];
-  writeFileSync(join(bundle, 'index.html'), readFileSync(facts.files.index));
-  writeFileSync(join(bundle, 'style.css'), readFileSync(facts.files.styles));
+  const projected = [...projectSources(project, facts.root, target), ...copyBuiltApp(built, bundle)];
+  for (const name of buildConfigFiles(project)) treeEntry(facts.root, name, target);
+  writeFileSync(join(bundle, 'index.html'), readFileSync(facts.files['index.html']));
+  writeFileSync(join(bundle, 'style.css'), readFileSync(join(facts.root, 'src', 'index.css')));
   writeFileSync(join(bundle, 'ui.js'), bootModule(payload));
   writeFileSync(join(bundle, 'worker.js'), 'export {};\n');
   writeFileSync(join(bundle, 'esm_dependencies.json'), '[]\n');
@@ -408,71 +464,73 @@ export function landBundle(payload, entry, target, built) {
 
 export function replayPatches(project, target, patches) {
   const written = [];
-  for (const { name, path, patch } of patches) {
+  for (const { path, patch } of patches) {
     if (typeof patch.file !== 'string' || !patch.file.startsWith(`${project.root}/`)) {
       fail(`${path} targets ${JSON.stringify(patch.file)}, which does not stand in ${project.root}`);
     }
     const inside = patch.file.slice(project.root.length + 1);
     const file = join(target, ...inside.split('/'));
     const replacements = patch.replacements ?? [];
-    if (replacements.length === 0) {
-      fail(`${path} carries no replacement, so it changes no byte`);
+    const carried = patch.creates;
+    if (replacements.length === 0 && carried === undefined) {
+      fail(`${path} carries neither a replacement nor a file, so it changes nothing on the landed copy`);
     }
-    const creates = patch.creates === true;
-    const wholeFile = replacements.every((replacement) => replacement.find === '');
-    if (creates !== wholeFile) {
-      fail(`${path} declares creates=${creates} and its replacements are ${wholeFile ? 'whole-file' : 'anchored'}, and a file a patch creates is the only form that spells a file whole`);
+    if (replacements.length > 0 && !existsSync(file)) {
+      fail(`${path} targets ${inside}, which the landed copy does not carry, so an anchor there names nothing`);
     }
-    if (creates) {
-      if (existsSync(file)) {
-        fail(`${path} declares itself the creator of ${inside}, and the landed copy already carries it`);
-      }
-      if (replacements.length !== 1) {
-        fail(`${path} creates ${inside} and states ${replacements.length} replacements, and a created file is written once`);
-      }
-      mkdirSync(join(file, '..'), { recursive: true });
-      writeFileSync(file, replacements[0].replace);
-      written.push(inside);
-      continue;
-    }
-    if (!existsSync(file)) {
-      fail(`${path} targets ${inside}, which the landed copy does not carry, and the patch does not declare creates`);
-    }
-    let text = readFileSync(file, 'utf8');
+    let text = existsSync(file) ? readFileSync(file, 'utf8') : '';
     for (const replacement of replacements) {
-      if (replacement.find === '') {
-        fail(`${path} carries an empty find, which is the whole-file form, and only a patch declaring creates may state it`);
+      if (typeof replacement.find !== 'string' || replacement.find === '') {
+        fail(`${path} carries an empty find, and a file the host lands carries its own body rather than one a patch spells whole`);
       }
       if (replacement.find === replacement.replace) {
         fail(`${path} has the same find and replace, so it changes no byte`);
       }
       const hits = text.split(replacement.find).length - 1;
-      if (hits === 0) fail(`${path} finds no occurrence of its find text in ${inside} of the landed copy`);
+      if (hits === 0) {
+        fail(
+          `${path} finds no occurrence of its find text in ${inside} of the landed copy, so the premise it stands on does ` +
+            'not hold in this copy and this chain lands nothing on a premise it cannot read',
+        );
+      }
       if (hits > 1) fail(`${path} finds ${hits} occurrences of its find text in ${inside}, and one anchor names one place`);
       text = text.split(replacement.find).join(replacement.replace);
     }
-    writeFileSync(file, text);
-    written.push(inside);
+    if (existsSync(file)) {
+      writeFileSync(file, text);
+      written.push(inside);
+    }
+    for (const created of carried === undefined ? [] : [carried]) {
+      if (typeof created.path !== 'string' || created.path === '') {
+        fail(`${path} carries a file and names no path for it, so nothing says where its body is written`);
+      }
+      if (typeof created.body !== 'string' || created.body === '') {
+        fail(`${path} carries ${created.path} and states no body for it, so the file it declares would be written empty`);
+      }
+      const destination = join(target, ...created.path.split('/'));
+      if (existsSync(destination)) {
+        fail(`${path} carries ${created.path}, and the landed copy already stands there`);
+      }
+      mkdirSync(join(destination, '..'), { recursive: true });
+      writeFileSync(destination, created.body);
+      written.push(created.path);
+    }
   }
   return written;
 }
 
 export function syncOpenAlgoFrontend() {
   const payload = payloadDeclaration();
-  const entries = payloadProjects(payload);
+  const project = payloadProject(payload);
   const target = resolveLanding(payload);
-  const report = [];
-  for (const entry of entries) {
-    if (!existsSync(join(REPO_ROOT, ...TREE_RUNTIME.split('/')))) {
-      fail(`the host carries no ${TREE_RUNTIME}, so the payload has no window to run in`);
-    }
-    const patches = declaredPatches(entry.project);
-    if (patches.length === 0) {
-      fail(`patches/ declares no patch over ${entry.project.root}, so the landed copy would carry the shell's own calls`);
-    }
-    const landed = landBundle(payload, entry, target, buildFrontend(entry.project));
-    const patched = replayPatches(entry.project, target, patches);
-    report.push({ id: entry.project.id, target, projected: landed.projected.length, patched, root: landed.facts.root });
+  if (!existsSync(join(REPO_ROOT, ...TREE_RUNTIME.split('/')))) {
+    fail(`the host carries no ${TREE_RUNTIME}, so the payload has no window to run in`);
   }
-  return report;
+  const patches = declaredPatches(project);
+  if (!patches.some(({ patch }) => patch.creates?.path === I18N_MODULE)) {
+    fail(`patches/ declares none of them over ${I18N_MODULE} in ${project.root}, so the landed copy would read no Chinese word table`);
+  }
+  const landed = landBundle(payload, project, target, buildFrontend(project, payload));
+  const patched = replayPatches(project, target, patches);
+  return [{ id: project.id, target, projected: landed.projected.length, patched, root: landed.facts.root }];
 }

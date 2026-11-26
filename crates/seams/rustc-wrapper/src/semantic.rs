@@ -1,7 +1,6 @@
 pub struct Nest {
     pub envelope: &'static str,
-    pub hand_off: &'static str,
-    pub appended: &'static str,
+    pub entry: &'static str,
 }
 
 pub struct Composition {
@@ -9,41 +8,52 @@ pub struct Composition {
     pub appended: bool,
 }
 
-pub fn nest(text: &str, file: &str, seam: &Nest) -> Option<Composition> {
-    let parsed = syn::parse_file(text).ok()?;
-    let envelope = find(&parsed, seam.envelope)?;
-    if declares(&envelope.block, seam.hand_off) {
-        return Some(Composition {
-            text: text.to_string(),
-            appended: false,
-        });
+pub enum Nesting {
+    Landed(Composition),
+    NoSuchSeam,
+    AnchorGone(&'static str),
+}
+
+pub fn nest(text: &str, file: &str, seam: &Nest) -> Nesting {
+    let parsed = match syn::parse_file(text) {
+        Ok(parsed) => parsed,
+        Err(_) => return Nesting::AnchorGone("the file it is written for no longer parses"),
+    };
+    let Some(envelope) = declared(&parsed, seam.envelope) else {
+        return Nesting::AnchorGone("its envelope is no longer declared here, so the seam has no body to carry");
+    };
+    if !carries(&envelope.block, seam.entry) {
+        return Nesting::AnchorGone(
+            "its envelope no longer resolves the entry the seam replaces, so wrapping it would hand the window no command at all",
+        );
     }
 
-    let start = offset(text, envelope.block.brace_token.span.open())?;
-    let end = offset(text, envelope.block.brace_token.span.close())?;
-    if end <= start || text[start..start + 1] != *"{" {
-        return None;
+    let opening = envelope.block.brace_token.span.open();
+    let closing = envelope.block.brace_token.span.close();
+    let (Some((head, after_open)), Some((_, after_close))) = (
+        crate::rules::TextRange::between(opening.start(), opening.end())
+            .ok()
+            .and_then(|at| at.bytes(text)),
+        crate::rules::TextRange::between(closing.start(), closing.end())
+            .ok()
+            .and_then(|at| at.bytes(text)),
+    ) else {
+        return Nesting::AnchorGone("the braces of its envelope cannot be turned into a position");
+    };
+    if head >= after_close || &text[head..after_open] != "{" {
+        return Nesting::AnchorGone("the braces of its envelope cannot be turned into a position");
     }
+    let body = match std::fs::read_to_string(file) {
+        Ok(body) if !body.trim().is_empty() => body,
+        Ok(_) => return Nesting::AnchorGone("the seam body it carries is empty"),
+        Err(_) => return Nesting::AnchorGone("the seam body it carries cannot be read"),
+    };
 
-    let body = std::fs::read_to_string(file).ok()?;
-    if body.trim().is_empty() {
-        return None;
-    }
-
-    let line_start = text[..start].rfind('\n').map(|at| at + 1).unwrap_or(0);
-    let indent: String = text[line_start..start]
-        .chars()
-        .take_while(|c| *c == ' ' || *c == '\t')
-        .collect();
-    let inner = format!("{indent}    ");
-
-    let mut out = String::with_capacity(text.len() + body.len() + 256);
-    out.push_str(&text[..start + 1]);
+    let inner = indent_at(text, head);
+    let entry = envelope.sig.ident.to_string();
+    let mut out = String::with_capacity(text.len() + body.len() + entry.len());
+    out.push_str(&text[..after_open]);
     out.push('\n');
-    out.push_str(&inner);
-    out.push_str("mod ");
-    out.push_str(seam.hand_off);
-    out.push_str(" {\n");
     for line in body.replace("\r\n", "\n").lines() {
         if line.trim().is_empty() {
             out.push('\n');
@@ -55,59 +65,82 @@ pub fn nest(text: &str, file: &str, seam: &Nest) -> Option<Composition> {
         out.push('\n');
     }
     out.push_str(&inner);
-    out.push_str("}\n");
+    out.push_str("    ");
+    out.push_str(&entry);
+    out.push_str("()\n");
     out.push_str(&inner);
-    out.push_str("let ");
-    out.push_str(seam.appended);
-    out.push_str(" = &");
-    out.push_str(seam.hand_off);
-    out.push_str("::Seam {\n");
-    out.push_str(&inner);
-    out.push_str("    next: Box::new(handler()),\n");
-    out.push_str(&inner);
-    out.push_str("    refused: Default::default(),\n");
-    out.push_str(&inner);
-    out.push_str("};\n");
-    out.push_str(&indent);
-    out.push_str("move |invoke| ");
-    out.push_str(seam.appended);
-    out.push_str(".call(invoke)\n");
-    out.push_str(&text[end..]);
-    Some(Composition {
+    out.push_str(&text[after_close..]);
+    Nesting::Landed(Composition {
         text: out,
         appended: true,
     })
 }
 
-fn find(file: &syn::File, name: &str) -> Option<syn::ItemFn> {
-    for item in &file.items {
-        if let syn::Item::Fn(function) = item {
-            if function.sig.ident == name {
-                return Some(function.clone());
-            }
-        }
+fn indent_at(text: &str, brace: usize) -> String {
+    match text[..brace].rfind('\n') {
+        Some(at) => text[at + 1..brace].to_string(),
+        None => text[..brace].to_string(),
     }
-    None
 }
 
-fn declares(block: &syn::Block, module: &str) -> bool {
-    block.stmts.iter().any(|statement| match statement {
-        syn::Stmt::Item(syn::Item::Mod(declared)) => declared.ident == module,
-        _ => false,
+fn declared(file: &syn::File, name: &str) -> Option<syn::ItemFn> {
+    file.items.iter().find_map(|item| match item {
+        syn::Item::Fn(function) if function.sig.ident == name => Some(function.clone()),
+        _ => None,
     })
 }
 
-fn offset(text: &str, span: proc_macro2::Span) -> Option<usize> {
-    let line = span.start().line;
-    let column = span.start().column;
-    if line == 0 {
-        return None;
+fn carries(block: &syn::Block, entry: &str) -> bool {
+    let mut found = false;
+    for statement in &block.stmts {
+        walk(statement, entry, &mut found);
     }
-    let mut offset = 0usize;
-    let mut current = 1usize;
-    while current < line {
-        offset += text[offset..].find('\n')? + 1;
-        current += 1;
+    found
+}
+
+fn walk(statement: &syn::Stmt, entry: &str, found: &mut bool) {
+    match statement {
+        syn::Stmt::Expr(expression, _) => reached(expression, entry, found),
+        syn::Stmt::Local(local) => {
+            if let Some(init) = &local.init {
+                reached(&init.expr, entry, found);
+            }
+        }
+        _ => {}
     }
-    Some((offset + column).min(text.len()))
+}
+
+fn reached(expression: &syn::Expr, entry: &str, found: &mut bool) {
+    if *found {
+        return;
+    }
+    match expression {
+        syn::Expr::Macro(mac) => {
+            if mac.mac.path.segments.last().is_some_and(|segment| segment.ident == "generate_handler") {
+                let mut inner = mac.mac.tokens.clone().into_iter();
+                while let Some(token) = inner.next() {
+                    if let proc_macro2::TokenTree::Ident(ident) = token {
+                        if ident == entry {
+                            *found = true;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        syn::Expr::Block(block) => {
+            for statement in &block.block.stmts {
+                walk(statement, entry, found);
+            }
+        }
+        syn::Expr::Call(call) => reached(&call.func, entry, found),
+        syn::Expr::MethodCall(call) => reached(&call.receiver, entry, found),
+        syn::Expr::Try(trying) => reached(&trying.expr, entry, found),
+        syn::Expr::Paren(paren) => reached(&paren.expr, entry, found),
+        syn::Expr::Unary(unary) => reached(&unary.expr, entry, found),
+        syn::Expr::Reference(reference) => reached(&reference.expr, entry, found),
+        syn::Expr::Field(field) => reached(&field.base, entry, found),
+        syn::Expr::Await(awaiting) => reached(&awaiting.base, entry, found),
+        _ => {}
+    }
 }

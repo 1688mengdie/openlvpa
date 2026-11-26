@@ -78,10 +78,22 @@ fn run(real_compiler: &str, args: &mut Vec<String>, passthrough: bool) -> i32 {
     }
     for gate in &report.gates {
         eprintln!(
-            "[lvpa-wrapper] seam gate {}: the rule table's declarations did not resolve on this \
-             pass ({}), so the covered crate compiled as upstream",
+            "[lvpa-wrapper] FATAL: seam gate {}: the rule table's declarations did not resolve on this \
+             pass ({}), so the covered crate would compile as upstream with its seam absent.",
             gate.declaration, gate.detail
         );
+    }
+
+    if report.broke_its_seam() {
+        eprintln!(
+            "[lvpa-wrapper] FATAL: the seams this pass covers did not land as declared, so the assembly \
+             would compile as upstream with them absent. Nothing reached the compiler and no build output \
+             was written for this crate."
+        );
+        if env::var("LVPA_WRAPPER_KEEP").is_err() {
+            rewrite::restore(&report);
+        }
+        return SEAM_BROKEN;
     }
 
     let status = spawn(real_compiler, args);
@@ -106,3 +118,5 @@ fn spawn(real_compiler: &str, args: &[String]) -> i32 {
         }
     }
 }
+
+const SEAM_BROKEN: i32 = 92;

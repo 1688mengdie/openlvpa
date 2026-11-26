@@ -1,6 +1,6 @@
 {
   "file": "openalgo-desktop/src/config/navigation.ts",
-  "landed": "The copy this patch is replayed on is the one sync-openalgo-frontend lands in the MiniApp user position, not the byte-frozen tree.",
+  "landed": "frontend: MiniApp 落位副本的 source/ 由 projectSources() 从该树 src/ 逐字节投影而来，与树内同文本，故锚在副本上唯一命中；改后的字节只进用户配置目录下的副本，取件步于树内零字节写入。",
   "description": "The two navigation lists carry word-table keys as their labels, and the label field says so. Each anchor stands on the exported list it names plus the neighbouring entry, so it survives a newer entry beside it and stops matching once the replacement has landed.",
   "replacements": [
     {

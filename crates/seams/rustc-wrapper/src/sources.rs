@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 pub const DECLARATION_ENV: &str = "LVPA_ABSORBED_SOURCES";
 
+pub const REPOSITORY_ENV: &str = "LVPA_REPO_ROOT";
+
 pub const DECLARATION_RELATIVE: &str = "scripts/absorbed-sources.json";
 
 pub const REPOSITORY_MARKER: &str = ".git";
@@ -58,15 +60,37 @@ impl std::fmt::Display for SourcesError {
     }
 }
 
+pub fn declared_repository_root() -> Option<PathBuf> {
+    let text = std::env::var_os(REPOSITORY_ENV)?;
+    if text.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(text);
+    if !path.is_dir() {
+        return None;
+    }
+    let canonical = path.canonicalize().unwrap_or(path);
+    Some(PathBuf::from(strip_verbatim(&canonical.to_string_lossy()).into_owned()))
+}
+
 pub fn workspace_root() -> Option<PathBuf> {
+    if let Some(declared) = declared_repository_root() {
+        return Some(declared);
+    }
     let mut starts: Vec<PathBuf> = Vec::new();
-    if let Ok(working) = std::env::current_dir() {
-        starts.push(working);
+    if let Some(declaration) = locate() {
+        let root = repository_of(&declaration);
+        if root.is_dir() {
+            starts.push(root);
+        }
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(directory) = exe.parent() {
             starts.push(directory.to_path_buf());
         }
+    }
+    if let Ok(working) = std::env::current_dir() {
+        starts.push(working);
     }
     for start in starts {
         let start = start.canonicalize().unwrap_or(start);
@@ -86,8 +110,13 @@ pub fn workspace_root() -> Option<PathBuf> {
 }
 
 pub fn repository_root() -> PathBuf {
-    workspace_root()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+    workspace_root().unwrap_or_else(|| {
+        eprintln!(
+            "[lvpa-wrapper] FATAL: the workspace root could not be resolved, so no path this pass writes can be \
+             named relative to it. Nothing is rewritten."
+        );
+        std::process::exit(97);
+    })
 }
 
 pub fn locate() -> Option<PathBuf> {
@@ -98,22 +127,35 @@ pub fn locate() -> Option<PathBuf> {
         }
         return None;
     }
-    for start in [std::env::current_dir().ok(), std::env::current_exe().ok()] {
-        let Some(start) = start else {
-            continue;
-        };
-        let start = start.canonicalize().unwrap_or(start);
-        let mut candidate = start.as_path();
-        loop {
-            let path = candidate.join(DECLARATION_RELATIVE);
-            if path.is_file() {
-                let text = path.to_string_lossy();
-                return Some(PathBuf::from(strip_verbatim(&text).into_owned()));
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(directory) = exe.parent() {
+            let mut cursor = directory;
+            loop {
+                let path = cursor.join(DECLARATION_RELATIVE);
+                if path.is_file() {
+                    let text = path.to_string_lossy();
+                    return Some(PathBuf::from(strip_verbatim(&text).into_owned()));
+                }
+                match cursor.parent() {
+                    Some(parent) => cursor = parent,
+                    None => break,
+                }
             }
-            match candidate.parent() {
-                Some(parent) => candidate = parent,
-                None => break,
-            }
+        }
+    }
+    let Some(working) = std::env::current_dir().ok() else {
+        return None;
+    };
+    let mut candidate = working.canonicalize().unwrap_or(working);
+    loop {
+        let path = candidate.join(DECLARATION_RELATIVE);
+        if path.is_file() {
+            let text = path.to_string_lossy();
+            return Some(PathBuf::from(strip_verbatim(&text).into_owned()));
+        }
+        match candidate.parent() {
+            Some(parent) => candidate = parent.to_path_buf(),
+            None => break,
         }
     }
     None

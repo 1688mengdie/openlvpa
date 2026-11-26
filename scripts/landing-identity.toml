@@ -1,0 +1,8 @@
+# Every crate this repo absorbs lands under the host this file names, at the version it names.
+# A seam reaches its host through an edge the landing already states: it names one here or it adds nothing.
+[[landed]]
+index = "windows"
+owner = "openbitfun-computer-use"
+declared = "windows"
+package = "windows"
+version = "0.62"

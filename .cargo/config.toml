@@ -1,3 +1,0 @@
-[build]
-rustc-wrapper = "crates/seams/rustc-wrapper/bin/lvpa-rustc-wrapper.exe"
-rustc-workspace-wrapper = "crates/seams/rustc-wrapper/bin/lvpa-rustc-wrapper.exe"

@@ -1,6 +1,6 @@
 {
   "file": "openalgo-desktop/src/lib/desktop.ts",
-  "description": "The landed copy runs as a MiniApp inside the host page, where the host already injects its own runtime adapter as `window.app` (product-domains/miniapp/bridge_builder.rs, `Exposes window.app with call(), fs.*, shell.*, ...`). The shell's own package is not there, and nothing here stands in its place: the import of `@tauri-apps/api/core` goes, and each call reaches the adapter the host already publishes. `isTauri` becomes a read of whether that adapter stands, each `invoke` reads that same field into a local before it calls, and the shell plugin's `open` becomes the adapter's `system.openExternal`. The anchors are that import line, the predicate it fed, the four call sites, and the one plugin import, never a line or an offset.",
+  "landed": "frontend: MiniApp 落位副本的 source/ 由 projectSources() 从该树 src/ 逐字节投影而来，src/lib/desktop.ts 在这道投影之内，故锚在副本上唯一命中；改后的字节只进用户配置目录下的副本，取件步于树内零字节写入。",
   "replacements": [
     {
       "find": "import { invoke, isTauri } from '@tauri-apps/api/core'\n",

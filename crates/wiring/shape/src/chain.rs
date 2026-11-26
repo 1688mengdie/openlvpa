@@ -1,60 +1,38 @@
+use std::sync::LazyLock;
+
 use crate::step::Step;
 
 pub struct Node {
     pub step: Step,
-    pub requires: &'static [Step],
 }
 
-pub const ORDER: [Node; 12] = [
-    Node {
-        step: Step::Wrapper,
-        requires: &[],
-    },
-    Node {
-        step: Step::Take,
-        requires: &[Step::Wrapper],
-    },
-    Node {
-        step: Step::Absorb,
-        requires: &[Step::Take],
-    },
-    Node {
-        step: Step::Merge,
-        requires: &[Step::Absorb],
-    },
-    Node {
-        step: Step::Strip,
-        requires: &[Step::Merge],
-    },
-    Node {
-        step: Step::Deshell,
-        requires: &[Step::Strip],
-    },
-    Node {
-        step: Step::Seam,
-        requires: &[Step::Deshell],
-    },
-    Node {
-        step: Step::Patches,
-        requires: &[Step::Seam],
-    },
-    Node {
-        step: Step::Install,
-        requires: &[Step::Patches],
-    },
-    Node {
-        step: Step::Frontend,
-        requires: &[Step::Install],
-    },
-    Node {
-        step: Step::Dev,
-        requires: &[Step::Frontend],
-    },
-    Node {
-        step: Step::Build,
-        requires: &[Step::Frontend],
-    },
-];
+const STEPS: &str = include_str!("../../../../scripts/chain-order.mjs");
+
+const ORDER_HEAD: &str = "const ORDER = [";
+
+pub static ORDER: LazyLock<Vec<Node>> = LazyLock::new(|| {
+    let named = STEPS
+        .split_once(ORDER_HEAD)
+        .and_then(|(_, rest)| rest.split_once(']'))
+        .map(|(body, _)| body)
+        .unwrap_or_else(|| panic!("scripts/chain-order.mjs carries no `{ORDER_HEAD}` line this chain reads its step order from"));
+    let mut nodes = Vec::new();
+    for text in named.split(',') {
+        let cleaned = text.trim();
+        let name = cleaned
+            .strip_prefix('\'')
+            .and_then(|rest| rest.strip_suffix('\''))
+            .map(|inner| inner.trim());
+        let step = name
+            .and_then(Step::from_name)
+            .unwrap_or_else(|| panic!("`{cleaned}` stands in scripts/chain-order.mjs and names no step this chain carries"));
+        if nodes.iter().any(|node: &Node| node.step == step) {
+            panic!("`{cleaned}` stands twice in the step order scripts/chain-order.mjs carries");
+        }
+        nodes.push(Node { step });
+    }
+    nodes
+});
 
 pub enum Entrance {
     Dev,
@@ -71,16 +49,10 @@ impl Entrance {
 }
 
 pub fn order_for(entrance: Entrance) -> Vec<Step> {
-    let mut ordered = Vec::with_capacity(ORDER.len());
-    let mut pending = Some(entrance.terminus());
-    while let Some(step) = pending {
-        let node = ORDER
-            .iter()
-            .find(|node| node.step == step)
-            .unwrap_or_else(|| panic!("{step:?} names a step the chain does not carry"));
-        ordered.push(node.step);
-        pending = node.requires.first().copied();
-    }
-    ordered.reverse();
-    ordered
+    let terminus = entrance.terminus();
+    let at = ORDER
+        .iter()
+        .position(|node| node.step == terminus)
+        .unwrap_or_else(|| panic!("{terminus:?} names a step the chain does not carry"));
+    ORDER[..=at].iter().map(|node| node.step).collect()
 }

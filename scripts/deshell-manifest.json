@@ -1,0 +1,28 @@
+{
+  "_comment": "The shell face every member directory gives up, and the two files that face is then read out of. A member directory is a crate the mirror workspace carries for its backend; the window it was built around is not part of that crate, so the shell's own build step, its config, its capabilities, its icons and its generated context all leave the tree before the crate is compiled. No entry has an exception: a face that matched only in one tree would leave a second window in another.",
+  "_anchors": "A file face is removed whole. A block face names a file and the text that opens the block this step takes out, and the block ends at the `}` that closes the function that text sits in, read by brace depth rather than by a line count. The anchor is the call and the lines inside it, never a line number, an offset or a byte: upstream moves the block and this step still finds it, and once a newer upstream drops the shell itself the block is spent and the removal refuses rather than reporting a face it never took.",
+  "_retains": "`retains` names text that must stand in the file after the block is gone. It is what tells a removed block from a spent anchor: the boundary between the crate that stays a member and the window that does not.",
+  "files": [
+    "tauri.conf.json",
+    "capabilities",
+    "icons",
+    "gen"
+  ],
+  "blocks": [
+    {
+      "file": "src-tauri/build.rs",
+      "retains": [
+        "println!(\"cargo::rustc-check-cfg=cfg(e2e_build_allowed)\");",
+        "println!(\"cargo:rustc-cfg=e2e_build_allowed\");"
+      ],
+      "opens": "fn main() {\n    // The E2E test build's features (src/e2e.rs) build only where CI asks\n    // for them in so many words; elsewhere lib.rs stops the build.\n    println!(\"cargo::rustc-check-cfg=cfg(e2e_build_allowed)\");\n    println!(\"cargo:rerun-if-env-changed=OPENALGO_E2E_BUILD\");\n    let e2e_feature = [\"CARGO_FEATURE_E2E_DEBUG_PORT\", \"CARGO_FEATURE_E2E_BROKER\"]\n        .iter()\n        .any(|f| std::env::var_os(f).is_some());\n    if e2e_feature && std::env::var(\"OPENALGO_E2E_BUILD\").as_deref() == Ok(\"1\") {\n        println!(\"cargo:rustc-cfg=e2e_build_allowed\");\n    }\n"
+    },
+    {
+      "file": "src-tauri/build.rs",
+      "retains": [
+        "println!(\"cargo:rustc-cfg=e2e_build_allowed\");"
+      ],
+      "opens": "    // App commands get explicit permissions (`allow-<command>`), so each one\n    // is reachable only from a capability that names it: the bundled\n    // start-up page (`default`) or the app's own server page (`remote-app`).\n    let app = tauri_build::AppManifest::new().commands(&[\n        \"startup_status\",\n        \"retry_server\",\n        \"restart_server\",\n        \"open_external\",\n        \"reset_account\",\n        \"start_fresh\",\n        \"window_proof\",\n        \"restart_to_update\",\n    ]);\n    if let Err(e) = tauri_build::try_build(tauri_build::Attributes::new().app_manifest(app)) {\n        panic!(\"tauri build failed: {e:#}\");\n    }\n"
+    }
+  ]
+}

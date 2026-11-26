@@ -1,6 +1,6 @@
 {
   "file": "openalgo-desktop/src/hooks/usePageTitle.ts",
-  "landed": "The copy this patch is replayed on is the one sync-openalgo-frontend lands in the MiniApp user position, not the byte-frozen tree.",
+  "landed": "frontend: MiniApp 落位副本的 source/ 由 projectSources() 从该树 src/ 逐字节投影而来，与树内同文本，故锚在副本上唯一命中；改后的字节只进用户配置目录下的副本，取件步于树内零字节写入。",
   "description": "The route titles carry word-table keys and the window title resolves them. Anchors stand on the exported hook and the route table each title sits in; they name the route a title belongs to rather than a position in the table.",
   "replacements": [
     {

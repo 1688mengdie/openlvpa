@@ -1,12 +1,31 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { REPO_ROOT, SHELL_CRATE, removeRootConfig, tauriCli, writeRootConfig } from './desktop-config.mjs';
+import { existsSync, rmSync } from 'node:fs';
+import {
+  APP_ROOT,
+  REPO_ROOT,
+  TAURI_CONF,
+  appRoot,
+  knownTreeArtifacts,
+  rootConfigPath,
+  tauriCli,
+  treeArtifacts,
+} from './desktop-config.mjs';
+import { wrapperEnvironment } from './install-rustc-wrapper.mjs';
 import { targetDir } from './target-dir.mjs';
 
+export const ARTIFACTS_BEFORE = knownTreeArtifacts();
+
+export function treeDidNotGrow() {
+  return treeArtifacts(ARTIFACTS_BEFORE);
+}
+
 export function tauriEnvironment() {
-  const environment = { ...process.env, CARGO_TARGET_DIR: targetDir(), TAURI_APP_PATH: SHELL_CRATE };
-  delete environment.CARGO_BUILD_RUSTC_WRAPPER;
-  delete environment.CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER;
-  return environment;
+  return {
+    ...wrapperEnvironment(),
+    CARGO_TARGET_DIR: targetDir(),
+    TAURI_APP_PATH: appRoot(),
+    TAURI_FRONTEND_PATH: REPO_ROOT,
+  };
 }
 
 export function firstCompilerError(lines) {
@@ -26,8 +45,8 @@ export function firstCompilerError(lines) {
   return cause === undefined || head.includes(cause.trim()) ? head : `${head}\n${cause.trim()}`;
 }
 
-export function probeCompiler(packageName, { cwd = REPO_ROOT } = {}) {
-  const result = spawnSync('cargo', ['build', '-p', packageName], {
+export function probeCompiler(packageName, carrier, { cwd = REPO_ROOT } = {}) {
+  const result = spawnSync('cargo', ['build', '-p', packageName, ...carrier], {
     cwd,
     encoding: 'utf8',
     env: tauriEnvironment(),
@@ -37,13 +56,19 @@ export function probeCompiler(packageName, { cwd = REPO_ROOT } = {}) {
   return firstCompilerError(lines);
 }
 
-export function runTauri(command) {
-  const path = writeRootConfig(command).path;
-  const args = command === 'dev'
-    ? [tauriCli(), 'dev', '--config', path, '--', '--jobs', '4']
-    : [tauriCli(), 'build', '--config', path];
+export function removeRootConfig() {
+  rmSync(APP_ROOT, { recursive: true, force: true });
+}
+
+export function tauriArgv(command, configPath, carrier) {
+  return command === 'dev'
+    ? [tauriCli(), 'dev', '--config', configPath, ...carrier, '--', '--jobs', '4']
+    : [tauriCli(), 'build', '--config', configPath, ...carrier];
+}
+
+export function runTauri(command, configPath, carrier) {
   const collected = [];
-  const child = spawn(process.execPath, args, {
+  const child = spawn(process.execPath, tauriArgv(command, configPath, carrier), {
     cwd: REPO_ROOT,
     stdio: ['inherit', 'pipe', 'pipe'],
     env: tauriEnvironment(),
@@ -62,20 +87,17 @@ export function runTauri(command) {
     if (child.pid) {
       spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', shell: true });
     }
-    removeRootConfig();
     process.exit(130);
   };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
-  process.on('exit', removeRootConfig);
-  return { child, collected, path };
+  return { child, collected, path: configPath };
 }
 
-export function runTauriToExit(command) {
-  const { child, collected } = runTauri(command);
+export function runTauriToExit(command, configPath, carrier) {
+  const { child, collected } = runTauri(command, configPath, carrier);
   return new Promise((resolve) => {
     child.on('exit', (code) => {
-      removeRootConfig();
       resolve({ code: code ?? 0, error: firstCompilerError(collected), log: collected.join('\n') });
     });
   });

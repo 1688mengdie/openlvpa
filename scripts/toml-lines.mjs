@@ -44,10 +44,6 @@ export function tableEntries(text, table) {
   return entries;
 }
 
-export function tableKeys(text, table) {
-  return tableEntries(text, table).map((entry) => entry.key);
-}
-
 export function readStringArray(text, key, sourceName) {
   const lines = splitLines(text);
   const open = new RegExp(`^\\s*${key}\\s*=\\s*\\[`);

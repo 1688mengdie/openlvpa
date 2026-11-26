@@ -1,10 +1,19 @@
 use syn::{Item, ReturnType, Type};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Composition {
-    pub host: &'static str,
-    pub envelope: &'static str,
-    pub seam: &'static str,
+pub enum Composition {
+    Envelope {
+        host: &'static str,
+        envelope: &'static str,
+        seam: &'static str,
+        entry: &'static str,
+    },
+}
+
+impl Composition {
+    pub fn unit(&self) -> crate::rules::RuleUnit {
+        crate::rules::RuleUnit::Library
+    }
 }
 
 pub struct Command {
@@ -23,12 +32,10 @@ pub fn commands(text: &str) -> Option<Vec<Command>> {
         if !is_command(function) {
             continue;
         }
-        let argument = command_argument(function)?;
-        let output = command_output(&function.sig.output)?;
         out.push(Command {
             name: function.sig.ident.to_string(),
-            argument,
-            output,
+            argument: command_argument(function)?,
+            output: command_output(&function.sig.output)?,
         });
     }
     Some(out)
@@ -124,28 +131,6 @@ fn const_name(index: usize) -> String {
     format!("COMMAND_{index}")
 }
 
-fn table(commands: &[Command]) -> String {
-    let mut out = String::new();
-    for (index, command) in commands.iter().enumerate() {
-        out.push_str(&format!(
-            "pub type Argument{index} = {};\n",
-            command.argument
-        ));
-        out.push_str(&format!("pub type Output{index} = {};\n", command.output));
-        out.push_str(&format!(
-            "pub const {}: Command<Argument{index}, Output{index}> = Command {{\n    name: \"{}\",\n    argument: || unreachable!(),\n    output: || unreachable!(),\n}};\n",
-            const_name(index),
-            command.name
-        ));
-    }
-    let entries: Vec<String> = (0..commands.len()).map(const_name).collect();
-    out.push_str(&format!(
-        "pub const ENTRIES: &[Command<(), ()>] = &[{}];\n",
-        entries.join(", ")
-    ));
-    out
-}
-
 pub fn embed(host: &str, discovered: &[Command]) -> Option<String> {
     let body = std::fs::read_to_string(host).ok()?;
     if body.trim().is_empty() {
@@ -158,11 +143,61 @@ pub fn embed(host: &str, discovered: &[Command]) -> Option<String> {
     Some(out)
 }
 
-pub fn wrap(text: &str, host: &str, envelope: &Composition) -> Option<crate::semantic::Composition> {
+pub fn table(commands: &[Command]) -> String {
+    let mut out = String::from(
+        "pub struct Command<A, O> {\n    pub name: &'static str,\n    pub argument: fn() -> A,\n    pub output: fn() -> O,\n}\n",
+    );
+    for (index, command) in commands.iter().enumerate() {
+        out.push_str(&format!(
+            "pub type Argument{index} = {};\n",
+            command.argument
+        ));
+        out.push_str(&format!("pub type Output{index} = {};\n", command.output));
+        out.push_str(&format!(
+            "pub const {}: Command<Argument{index}, Output{index}> = Command {{\n    name: \"{}\",\n    argument: || unreachable!(),\n    output: || unreachable!(),\n}};\n",
+            const_name(index),
+            command.name
+        ));
+    }
+    let entries: Vec<String> = (0..commands.len())
+        .map(|index| format!("{}.name", const_name(index)))
+        .collect();
+    out.push_str(&format!(
+        "pub const ENTRIES: &[&'static str] = &[{}];\n",
+        entries.join(", ")
+    ));
+    out
+}
+
+pub fn wrap(text: &str, carried: &str, envelope: &'static str, entry: &'static str) -> crate::semantic::Nesting {
     let nest = crate::semantic::Nest {
-        envelope: envelope.envelope,
-        hand_off: envelope.seam,
-        appended: envelope.seam,
+        envelope,
+        entry,
     };
-    crate::semantic::nest(text, host, &nest)
+    crate::semantic::nest(text, &carried_path(carried), &nest)
+}
+
+fn carried_path(landed: &str) -> String {
+    match resolve(landed) {
+        Some(path) => path,
+        None => landed.to_string(),
+    }
+}
+
+fn resolve(landed: &str) -> Option<String> {
+    let root = match crate::sources::workspace_root() {
+        Some(root) => root,
+        None => {
+            eprintln!(
+                "[lvpa-wrapper] FATAL: the workspace root could not be resolved, so the composition body {landed} \
+                 cannot be read and nothing tells a rule that carried it from one that did not. Nothing is rewritten."
+            );
+            std::process::exit(97);
+        }
+    };
+    let path = root.join(landed);
+    match path.is_file() {
+        true => Some(path.to_string_lossy().into_owned()),
+        false => None,
+    }
 }

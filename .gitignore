@@ -9,10 +9,12 @@ dist/
 *.tsbuildinfo
 crates/seams/rustc-wrapper/bin/
 .lvpa-seam-run/
-crates/seams/openalgo-backend/src/table.rs
 
 # 运行时与临时
-.openlvpa/
+.openlvpa/*
+!.openlvpa/run/
+.openlvpa/run/*
+!.openlvpa/run/tauri.root.conf.json
 *.log
 *.tmp
 .openbitfun/

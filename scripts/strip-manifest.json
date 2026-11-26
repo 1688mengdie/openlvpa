@@ -1,11 +1,10 @@
 {
-  "_reads": "`tables` names every TOML table the take reads out of a manifest and then removes, because a table read out of a tree and left standing in it is a second answer to the same question. Their marker and workspace tables are read only when the manifest declares a workspace, since that is the shape whose meaning differs at a crate root.",
+  "_reads": "Only a workspace table leaves the tree before the file leaves it whole: `[workspace]` and `[workspace.*]` are the graph root a taken tree may not keep, so the take takes them out of every `Cargo.toml` and every `package.json` on the way in, and the take also snapshots each of those files whole.",
   "_comment": "The single rule face every taken tree is filtered by on the way in, however many trees are declared. No entry has an exception and no entry has a depth limit: a rule that matched only at the top would leave a second answer further down, and a second answer is the same thing as a second graph wherever it sits.",
-  "_predicate": "A taken tree carries static source and nothing that can speak for itself. What speaks for itself is a version-control entry point, a build root, a package-manager root, or a generated artifact. A crate's `Cargo.toml` and a package's `package.json` are identity cards and stay; any workspace table inside either is removed on the way in, because a workspace table is a graph root rather than an identity.",
-  "tables": [
-    "[patch.crates-io]",
-    "[profile.*]"
-  ],
+  "_predicate": "A taken tree carries static source and nothing that can speak for itself. What speaks for itself is a version-control entry point, a build root, a package-manager root, or a generated artifact. A crate's `Cargo.toml` and a package's `package.json` are build roots and package-manager roots, so they are stripped at every depth and under no exception: `vendor/` is descended into and its identity cards are stripped there too. The take snapshots each one whole before it strips it, so the merge reads every one of them from the snapshot and the tree keeps none.",
+  "_identityCardDirs": "A declared directory that is also a directory the static source reads through is not removed whole: a vendored crate under `vendor/` is source. Those directories are named here and are descended into, and the declared file names and prefixes and suffixes are stripped inside them like anywhere else, so a `Cargo.toml` under `vendor/` leaves with the rest.",
+  "_readBySourceNames": "A declared name under a directory named here stays when the tree's own source reads it at compile time: a `dist/` some `include_str!` names is that source's input, not an artifact the compiler produced, and removing it breaks an implementation that already stands. Every other directory of that name is removed as an artifact. A `dist/` spared this way is a source input and never a build output as well: the release layer it carries is rebuilt on the bench, and the install step stops the pass if that producer changes the tree's copy.",
+  "tables": [],
   "workspaceTables": [
     "[workspace]",
     "[workspace.*]"
@@ -13,6 +12,8 @@
   "workspaceTablePattern": "^\\s*\\[workspace(\\]|\\.)",
   "workspaceKeyPattern": "^\\s*\"workspaces\"\\s*:\\s*[\\[{]",
   "excludedFileNames": [
+    "Cargo.toml",
+    "package.json",
     "Cargo.lock",
     "pnpm-workspace.yaml",
     "pnpm-lock.yaml",
@@ -25,6 +26,7 @@
   ],
   "excludedDirNames": [
     ".git",
+    ".gitmodules",
     ".github",
     ".cargo",
     "node_modules",
@@ -33,9 +35,20 @@
     "build",
     "target",
     ".turbo",
+    ".vite",
     "coverage"
   ],
+  "identityCardDirs": [
+    "vendor"
+  ],
+  "readBySourceNames": [
+    "dist"
+  ],
   "excludedFilePrefixes": [
+    ".gitattributes",
+    ".gitconfig",
+    ".gitignore",
+    ".gitmodules",
     ".yarnrc",
     ".vite"
   ],

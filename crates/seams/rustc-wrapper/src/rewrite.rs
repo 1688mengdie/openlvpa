@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+﻿use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::exit;
@@ -42,7 +42,6 @@ pub struct Report {
     pub record: Option<PathBuf>,
     pub gated: Vec<String>,
     pub gates: Vec<Gate>,
-    locks: Vec<InjectionLock>,
 }
 
 impl Report {
@@ -50,7 +49,11 @@ impl Report {
         !self.rewrote.is_empty()
     }
 
-    pub fn self_check(&self, covered: usize, taken: usize) -> Option<String> {
+    pub fn broke_its_seam(&self) -> bool {
+        !self.gates.is_empty() || !self.misses.is_empty() || !self.abandoned.is_empty()
+    }
+
+    pub fn self_check(&self, covered: usize, reached_upstream: usize) -> Option<String> {
         if !self.misses.is_empty() {
             let lines: Vec<String> = self
                 .misses
@@ -70,13 +73,25 @@ impl Report {
                 lines.join("\n")
             ));
         }
-        if self.any() && covered != taken {
+        if self.any() && reached_upstream != 0 && covered == reached_upstream {
             return Some(format!(
                 "{} rule(s) reported as applied ({}), but a rewritten source reached the compiler \
-                 for only {taken} of {covered} covered crate(s) — the build would silently keep \
-                 upstream behaviour for the rest",
+                 for none of them — the build would silently keep upstream behaviour",
                 self.rewrote.len(),
                 self.rewrote.join(", ")
+            ));
+        }
+        if !self.gates.is_empty() {
+            let lines: Vec<String> = self
+                .gates
+                .iter()
+                .map(|gate| format!("  - {}: {}", gate.declaration, gate.detail))
+                .collect();
+            return Some(format!(
+                "{} declaration(s) the rule table is written against did not resolve on this pass, so the crate \
+                 they cover would compile as upstream with its seam absent:\n{}",
+                self.gates.len(),
+                lines.join("\n")
             ));
         }
         if !self.abandoned.is_empty() && self.any() {
@@ -102,7 +117,6 @@ pub fn apply(args: &mut Vec<String>) -> Report {
         record: None,
         gated: Vec::new(),
         gates: Vec::new(),
-        locks: Vec::new(),
     };
 
     for record in outstanding_records() {
@@ -130,12 +144,14 @@ pub fn apply(args: &mut Vec<String>) -> Report {
         }
     }
 
-    for (declaration, detail) in rules::unresolved_declarations() {
-        eprintln!(
-            "[lvpa-wrapper] FATAL: the rule table's declaration `{declaration}` did not resolve, so \
-             {detail}. Nothing is rewritten against an unresolved table."
-        );
-        exit(97);
+    if writes_a_covered_crate() {
+        for (declaration, detail) in rules::unresolved_declarations() {
+            eprintln!(
+                "[lvpa-wrapper] FATAL: the rule table's declaration `{declaration}` did not resolve, so \
+                 {detail}. Nothing is rewritten against an unresolved table."
+            );
+            exit(97);
+        }
     }
 
     match rules::trees_state() {
@@ -162,23 +178,31 @@ pub fn apply(args: &mut Vec<String>) -> Report {
         restore_then_exit(&report, 95);
     }
 
+    match rules::declaration_state() {
+        Ok(()) => {}
+        Err(detail) => {
+            eprintln!("[lvpa-wrapper] FATAL: {detail}");
+            finish_run();
+            restore_then_exit(&report, 95);
+        }
+    }
+
     let mut roots = Vec::new();
     for arg in args.iter() {
         if !arg.ends_with(".rs") || arg.starts_with('-') {
             continue;
         }
-        let root = PathBuf::from(arg);
-        let root = match fs::canonicalize(&root) {
-            Ok(abs) => strip_unc(abs),
-            Err(_) => root,
-        };
-        roots.push(root);
+        roots.push(PathBuf::from(arg));
     }
     if env::var("LVPA_WRAPPER_TRACE").is_ok() {
         eprintln!("[lvpa-wrapper] trace: {} .rs argument(s) on the command line: {roots:?}", roots.len());
     }
     let Some(root) = roots.pop() else {
         return report;
+    };
+    let root = match fs::canonicalize(&root) {
+        Ok(abs) => strip_unc(abs),
+        Err(_) => root,
     };
     let Some(crate_src) = root.parent().map(Path::to_path_buf) else {
         return report;
@@ -193,6 +217,12 @@ pub fn apply(args: &mut Vec<String>) -> Report {
             }
             return report;
         }
+        rules::Coverage::Absorbed => {
+            if env::var("LVPA_WRAPPER_TRACE").is_ok() {
+                eprintln!("[lvpa-wrapper] trace: absorbed {subject}");
+            }
+            return report;
+        }
         rules::Coverage::Orphan(spec) => {
             eprintln!(
                 "[lvpa-wrapper] FATAL: {subject} sits inside the tree declared as {}, yet no crate \
@@ -202,22 +232,31 @@ pub fn apply(args: &mut Vec<String>) -> Report {
             );
             exit(93);
         }
+        rules::Coverage::Ruleless(spec) => {
+            eprintln!(
+                "[lvpa-wrapper] FATAL: {subject} is claimed by the spec for {}, and that spec \
+                 carries no rule that lands in it. A spec with no rule covers nothing, so the \
+                 pass stops here.",
+                spec.package
+            );
+            exit(93);
+        }
     };
 
-    let present_unit = unit_of(&crate_src, args);
-    let mut covered = 0usize;
-    let mut taken = 0usize;
-    covered += 1;
-
+    let covered = 1usize;
+    let Some(repository) = workspace_root_path() else {
+        eprintln!(
+            "[lvpa-wrapper] FATAL: the workspace root could not be resolved, so covered crate {} cannot carry any \
+             seam it declares and nothing tells a seam that landed from one that did not. Nothing is rewritten.",
+            spec.crate_path
+        );
+        exit(97);
+    };
     let mut missing_seams: Vec<(&str, String)> = Vec::new();
     for seam in spec.seams {
-        let source = workspace_root_path().map(|root| root.join(seam.host.as_str_checked()));
-        let readable = source.as_ref().map(|path| path.is_file()).unwrap_or(false);
-        if !readable {
-            let reason = match &source {
-                Some(path) => format!("{} is not a readable file", path.display()),
-                None => "the workspace root could not be resolved".to_string(),
-            };
+        let source = repository.join(seam.host.as_str_checked());
+        if !source.is_file() {
+            let reason = format!("{} is not a readable file", source.display());
             missing_seams.push((seam.module, reason));
         }
     }
@@ -233,24 +272,35 @@ pub fn apply(args: &mut Vec<String>) -> Report {
                 .iter()
                 .map(|rule| rule.reported_id(spec.source_tree)),
         );
-        if let Some(reason) = report.self_check(covered, taken) {
+        if let Some(reason) = report.self_check(covered, 0) {
             eprintln!("[lvpa-wrapper] FATAL: seam self-check failed: {reason}");
             restore_then_exit(&report, 93);
         }
         return report;
     }
 
-    if !root.is_file() {
+    let Ok(root) = std::fs::canonicalize(&root) else {
         eprintln!(
             "[lvpa-wrapper] FATAL: the covered crate root {subject} declares {package} but the \
              compiler was handed no file of it, so the seam has nowhere to land",
             package = spec.package
         );
         restore_then_exit(&report, 93);
-    }
+    };
+    let root = strip_unc(root);
 
-    match inject(&root, &crate_src, present_unit, spec) {
-        Ok(injected) => {
+    let injected = match inject(&root, &crate_src, spec) {
+        Ok(injected) => Some(injected),
+        Err(error) => {
+            eprintln!(
+                "[lvpa-wrapper] FATAL: could not inject the seam for {}: {error}",
+                crate_src.display()
+            );
+            None
+        }
+    };
+    match injected {
+        Some(injected) => {
             report
                 .rewrote
                 .extend(injected.rules.0.iter().map(|id| qualified_id(spec, id)));
@@ -270,14 +320,9 @@ pub fn apply(args: &mut Vec<String>) -> Report {
                 report.footprint.files.push(entry);
             }
             report.footprint.dirs.extend(injected.footprint.dirs);
-            report.locks.push(injected.lock);
-            taken += 1;
+            LIVE_LOCKS.with(|cell| cell.borrow_mut().push(injected.lock));
         }
-        Err(error) => {
-            eprintln!(
-                "[lvpa-wrapper] FATAL: could not inject the seam for {}: {error}",
-                crate_src.display()
-            );
+        None => {
             report.abandoned.extend(
                 spec.rules
                     .iter()
@@ -286,7 +331,7 @@ pub fn apply(args: &mut Vec<String>) -> Report {
         }
     }
 
-    if let Some(reason) = report.self_check(covered, taken) {
+    if let Some(reason) = report.self_check(covered, 0) {
         eprintln!("[lvpa-wrapper] FATAL: seam self-check failed: {reason}");
         restore_then_exit(&report, 93);
     }
@@ -353,7 +398,6 @@ struct InjectResult {
 fn inject(
     root: &Path,
     crate_src: &Path,
-    present_unit: rules::RuleUnit,
     spec: &'static rules::CrateSpec,
 ) -> std::io::Result<InjectResult> {
     let injection_lock = take_injection_lock(crate_src)?;
@@ -371,48 +415,150 @@ fn inject(
                 .collect()
         })
         .unwrap_or_default();
+    let host_manifest = match crate_src
+        .ancestors()
+        .find(|dir| dir.join("Cargo.toml").is_file())
+        .map(|dir| dir.join("Cargo.toml"))
+    {
+        Some(manifest) => manifest,
+        None => unreachable_landing(
+            crate_src,
+            None,
+            "no manifest stands above the crate, so no edge of its host can be replaced",
+        ),
+    };
 
+    let mut declared_modules: Vec<(&'static str, &'static [&'static str])> = Vec::new();
+    let mut seam_dependencies: Vec<&'static [rules::SeamDependency]> = Vec::new();
     for seam in seams {
         let Some(host) = workspace_root_path().map(|root| root.join(seam.host.as_str_checked()))
         else {
             missed.push(format!("module_decl.{}", seam.module));
             continue;
         };
-        if let Err(error) = write_seam_module(&host, crate_src, seam, &mut footprint) {
-            abandoned.push(format!("module_decl.{}: {error}", seam.module));
+        match write_seam_module(&host, crate_src, seam, &mut footprint) {
+            Ok(Some(declaration)) => declared_modules.push(declaration),
+            Ok(None) => {}
+            Err(error) => abandoned.push(format!("module_decl.{}: {error}", seam.module)),
+        }
+        seam_dependencies.push(seam.dependencies);
+    }
+    let mut declarations: Vec<&rules::SeamDependency> = seam_dependencies.iter().copied().flatten().collect();
+    declarations.extend(
+        spec.dependencies
+            .iter()
+            .filter(|dependency| matches!(dependency.landing, rules::Landing::HostManifest)),
+    );
+    if !declarations.is_empty() {
+        let manifest = crate_src
+            .ancestors()
+            .find(|dir| dir.join("Cargo.toml").is_file())
+            .map(|dir| dir.join("Cargo.toml"));
+        match manifest {
+            Some(manifest) => match declare_dependencies(&manifest, declarations.as_slice(), &mut footprint) {
+                Ok(()) => {}
+                Err(error) => abandoned.push(format!("dependency: {error}")),
+            },
+            None => abandoned.push("dependency: no manifest above the crate".to_string()),
         }
     }
-
-    for rule in spec.rules {
-        if !rule_unit(rule).runs_in(present_unit) {
-            missed.push(rule.id.to_string());
-            continue;
+    for dependency in spec
+        .dependencies
+        .iter()
+        .filter(|dependency| matches!(dependency.landing, rules::Landing::SeamModule))
+    {
+        if let Err(error) = replace_an_edge(&host_manifest, dependency, &mut footprint) {
+            unreachable_landing(crate_src, None, &format!("dependency.{}: {error}", dependency.package));
         }
+        if dependency.managed.adds_an_edge() {
+            let body = match workspace_root_path().map(|root| root.join(dependency.path).join("Cargo.toml")) {
+                Some(manifest) if manifest.is_file() => manifest,
+                _ => {
+                    missed.push(format!("dependency.{}.Cargo.toml", dependency.package));
+                    continue;
+                }
+            };
+            let one: [&rules::SeamDependency; 1] = [dependency];
+            let landed = declare_dependencies(&body, &one, &mut footprint);
+            match landed {
+                Ok(()) => {}
+                Err(error) => missed.push(format!("dependency.{}: {error}", dependency.package)),
+            }
+        }
+    }
+    for (module, seeds) in &declared_modules {
+        for seed_at in *seeds {
+            let anchor = crate_src.join(seed_at);
+            match declare_module(&anchor, module, &mut footprint) {
+                Ok(()) => {}
+                Err(error) => abandoned.push(format!("module_decl.{module}: {error}")),
+            }
+        }
+    }
+    let mut extern_crates: Vec<String> = Vec::new();
+    for dependency in seam_dependencies.iter().copied().flatten() {
+        if let Some(name) = dependency.extern_crate() {
+            if !extern_crates.contains(&name) {
+                extern_crates.push(name);
+            }
+        }
+    }
+    for path in seam_module_paths(crate_src, &declared_modules) {
+        let mut module_text = normalize(&fs::read_to_string(&path)?);
+        for source in seam_dependencies.iter().copied().flatten() {
+            let declared = source.declared_name();
+            if source.name != declared {
+                module_text = module_text.replace(
+                    &format!("use {}::", source.name.replace('-', "_")),
+                    &format!("use {declared}::"),
+                );
+            }
+        }
+        let mut landed = declare_extern_crates(&module_text, &extern_crates);
+        landed = drop_legacy_bindings(&landed, &extern_crates);
+        write_in_place(&path, landed.into_bytes(), &mut footprint)?;
+    }
+    for rule in spec.rules {
         let target = crate_src.join(rule.file);
         if !target.is_file() {
-            missed.push(rule.id.to_string());
-            continue;
+            unreachable_landing(
+                crate_src,
+                Some(rule),
+                &format!("{} is not in the crate", rule.file),
+            );
         }
+        if !seam_is_landed(crate_src, rule) {
+            unreachable_landing(crate_src, Some(rule), "its seam module did not land in this crate");
+        }
+
         let Ok(rel) = target.strip_prefix(crate_src) else {
-            missed.push(rule.id.to_string());
-            continue;
+            unreachable_landing(crate_src, Some(rule), &format!("{} is outside the crate", rule.file));
         };
         let segments: Vec<String> = rel
             .components()
             .map(|component| component.as_os_str().to_string_lossy().into_owned())
             .collect();
         if segments.is_empty() {
-            missed.push(rule.id.to_string());
-            continue;
+            unreachable_landing(crate_src, Some(rule), "it lands on no source of the crate");
         }
 
         let previous = by_segment.get(&segments).map(|target| target.rewritten.clone());
-        let Some(rewritten) = rewrite_text(&target, rule, previous.as_deref())? else {
-            missed.push(rule.id.to_string());
-            continue;
+        let source = match previous.clone() {
+            Some(text) => text,
+            None => fs::read_to_string(&target)?,
         };
-
-        let source = fs::read_to_string(&target)?;
+        let rewritten = match rewrite_text(&target, rule, previous.as_deref())? {
+            Resolution::Rewritten(text) => text,
+            Resolution::NotApplicable => {
+                missed.push(rule.id.to_string());
+                continue;
+            }
+            Resolution::AnchorMissing => unreachable_landing(
+                crate_src,
+                Some(rule),
+                "the seam is here and the anchor it is written for is gone",
+            ),
+        };
         by_segment.insert(
             segments,
             Target {
@@ -443,6 +589,107 @@ fn inject(
     })
 }
 
+fn unreachable_landing(crate_src: &Path, rule: Option<&Rule>, why: &str) -> ! {
+    match rule {
+        Some(rule) => eprintln!(
+            "[lvpa-wrapper] FATAL: rule {} found no landing in {}: {why}. A rule written for a crate \
+             this pass covers must land, so the pass stops here.",
+            rule.id,
+            crate_src.display()
+        ),
+        None => eprintln!(
+            "[lvpa-wrapper] FATAL: {why}. A seam written for a crate this pass covers either \
+             replaces the edge it is declared against or stops the pass, and it stops here in {}.",
+            crate_src.display()
+        ),
+    }
+    exit(93);
+}
+
+fn replace_an_edge(
+    manifest: &Path,
+    dependency: &rules::SeamDependency,
+    footprint: &mut Footprint,
+) -> Result<(), String> {
+    let text = normalize(
+        &fs::read_to_string(manifest)
+            .map_err(|error| format!("{} is not readable: {error}", manifest.display()))?,
+    );
+    let target = normalized_package(dependency.package);
+    let reached = |line: &str| {
+        edge_package(line).is_some_and(|held| normalized_package(&held) == target)
+    };
+    let Some(standing) = text
+        .split_inclusive('\n')
+        .enumerate()
+        .find(|(_, line)| reached(line) && edge_key(line).is_some_and(|key| key == dependency.declared_name()))
+        .map(|(index, _)| index)
+    else {
+        return Err(format!(
+            "{} carries no `{}` edge, and a seam replaces that edge rather than standing beside it",
+            manifest.display(),
+            dependency.declared_name()
+        ));
+    };
+    let landed = dependency.origin(&manifest_spec_path(
+        &workspace_root_path().unwrap_or_else(|| PathBuf::from(".")),
+        manifest.parent().unwrap_or(manifest),
+    ));
+    let mut replaced: Vec<String> = Vec::new();
+    for (index, line) in text.split_inclusive('\n').enumerate() {
+        if index != standing && reached(line) {
+            continue;
+        }
+        if index != standing {
+            replaced.push(line.to_string());
+            continue;
+        }
+        let Some(cut) = line.find('=') else {
+            replaced.push(line.to_string());
+            continue;
+        };
+        let alias = line[..cut].trim_end();
+        let ending = if line.ends_with('\n') { "\n" } else { "" };
+        replaced.push(format!(
+            "{alias} = {{ package = \"{}\", {landed}}}{ending}",
+            dependency.package
+        ));
+    }
+    write_in_place(manifest, replaced.concat().into_bytes(), footprint)
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn normalized_package(name: &str) -> String {
+    name.replace('-', "_").to_ascii_lowercase()
+}
+
+fn edge_key(line: &str) -> Option<&str> {
+    let cut = line.find('=')?;
+    let alias = line[..cut].trim();
+    if alias.is_empty()
+        || alias.starts_with('[')
+        || alias.starts_with('#')
+        || alias.contains(char::is_whitespace)
+    {
+        return None;
+    }
+    Some(alias)
+}
+
+fn edge_package(line: &str) -> Option<String> {
+    let key = edge_key(line)?;
+    let rest = line[key.len()..].trim_start().strip_prefix('=')?;
+    let Some((_, after)) = rest.split_once("package") else {
+        return Some(key.to_string());
+    };
+    let quoted = after.trim_start().strip_prefix('=')?.trim_start();
+    match quoted.chars().next() {
+        Some(quote @ ('"' | '\'')) => quoted[1..].split(quote).next().map(str::to_string),
+        _ => Some(key.to_string()),
+    }
+}
+
 fn seam_write_order<'a>(
     root_segments: &[String],
     keys: impl Iterator<Item = &'a Vec<String>>,
@@ -465,34 +712,275 @@ fn write_seam_module(
     crate_src: &Path,
     seam: &rules::Seam,
     footprint: &mut Footprint,
-) -> std::io::Result<()> {
-    let module_dir = crate_src.join(seam.module);
+) -> std::io::Result<Option<(&'static str, &'static [&'static str])>> {
+    let Some(first) = seam.seeds.first() else {
+        return Err(landing_miss(
+            src,
+            seam.module,
+            "the seam names no crate root, so its module has no directory to land in",
+        ));
+    };
+    let module_dir = match crate_src.join(first).parent() {
+        Some(dir) => dir.join(seam.module),
+        None => crate_src.join(seam.module),
+    };
     let module_file = module_dir.join("mod.rs");
     let body = fs::read_to_string(src)?;
     let body = land_seam_source(&body, src, seam.module)?;
-    write_in_place(&module_file, body.into_bytes(), footprint)?;
-    let Some(src_dir) = src.parent() else {
-        return Ok(());
-    };
-    for entry in fs::read_dir(src_dir)?.flatten() {
-        let path = entry.path();
-        if !path.is_file() || path == src {
-            continue;
-        }
-        let Some(name) = path.file_name() else {
-            continue;
-        };
-        let landed = module_dir.join(name);
-        if path.extension().is_some_and(|ext| ext == "rs") {
-            let sibling = fs::read_to_string(&path)?;
-            let body = land_seam_source(&sibling, &path, seam.module)?;
-            write_in_place(&landed, body.into_bytes(), footprint)?;
-        } else {
-            let bytes = fs::read(&path)?;
-            write_in_place(&landed, bytes, footprint)?;
+    if let Some(dir) = src.parent() {
+        for entry in fs::read_dir(dir)?.flatten() {
+            let path = entry.path();
+            if !path.is_file() || path == src {
+                continue;
+            }
+            let Some(name) = path.file_name() else {
+                continue;
+            };
+            let landed = module_dir.join(name);
+            if path.extension().is_some_and(|ext| ext == "rs") {
+                let sibling = fs::read_to_string(&path)?;
+                let body = land_seam_source(&sibling, &path, seam.module)?;
+                write_in_place(&landed, body.into_bytes(), footprint)?;
+            } else {
+                let bytes = fs::read(&path)?;
+                write_in_place(&landed, bytes, footprint)?;
+            }
         }
     }
+    write_in_place(&module_file, body.into_bytes(), footprint)?;
+    Ok(Some((seam.module, seam.seeds)))
+}
+
+fn seam_module_paths(
+    crate_src: &Path,
+    declared: &[(&'static str, &'static [&'static str])],
+) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for (module, seeds) in declared {
+        for seed_at in *seeds {
+            let anchor = crate_src.join(seed_at);
+            if let Some(dir) = anchor.parent() {
+                let landed = dir.join(module).join("mod.rs");
+                if landed.is_file() && !roots.contains(&landed) {
+                    roots.push(landed);
+                }
+            }
+        }
+    }
+    roots
+}
+
+fn declare_module(
+    anchor: &Path,
+    module: &str,
+    footprint: &mut Footprint,
+) -> std::io::Result<()> {
+    let text = normalize(&fs::read_to_string(anchor)?);
+    if modules_of(&text).iter().any(|name| name == module) {
+        return Ok(());
+    }
+    let at = declaration_after_inner_attributes(&text);
+    let mut landed = String::with_capacity(text.len() + module.len() + 8);
+    landed.push_str(&text[..at]);
+    if at > 0 && !text[..at].ends_with('\n') {
+        landed.push('\n');
+    }
+    landed.push_str(&format!("pub mod {module};\n"));
+    landed.push_str(&text[at..]);
+    write_in_place(anchor, landed.into_bytes(), footprint)?;
     Ok(())
+}
+
+fn declaration_after_inner_attributes(text: &str) -> usize {
+    let mut at = 0usize;
+    while at < text.len() {
+        let end = match text[at..].find('\n') {
+            Some(offset) => at + offset + 1,
+            None => text.len(),
+        };
+        let body = text[at..end].trim();
+        if body.starts_with("//!") || body.starts_with("#![") {
+            at = end;
+            continue;
+        }
+        break;
+    }
+    at
+}
+
+fn declare_extern_crates(text: &str, crates: &[String]) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut cut = lines
+        .iter()
+        .position(|line| !line.starts_with("//!") && !is_module_declaration(line))
+        .unwrap_or(lines.len());
+    while cut > 0 && lines[cut - 1].trim().is_empty() {
+        cut -= 1;
+    }
+    let pending: Vec<String> = crates
+        .iter()
+        .filter(|name| !text.contains(&format!("extern crate {name};")))
+        .map(|name| format!("extern crate {name};\n"))
+        .collect();
+    let mut head: String = lines[..cut].iter().map(|line| format!("{line}\n")).collect();
+    for binding in pending {
+        head.push_str(&binding);
+    }
+    let tail: String = lines[cut..].iter().map(|line| format!("{line}\n")).collect();
+    format!("{head}{tail}")
+}
+
+fn drop_legacy_bindings(text: &str, keep: &[String]) -> String {
+    text.lines()
+        .filter(|line| match line.trim().strip_prefix("extern crate ") {
+            Some(rest) => {
+                let name = rest.trim_end_matches(';').trim();
+                keep.iter().any(|kept| kept == name)
+            }
+            None => true,
+        })
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
+fn is_module_declaration(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let body = trimmed.strip_prefix("pub ").unwrap_or(trimmed);
+    body.starts_with("mod ") || body.starts_with("pub mod ")
+}
+
+fn declare_dependencies(
+    manifest: &Path,
+    dependencies: &[&rules::SeamDependency],
+    footprint: &mut Footprint,
+) -> std::io::Result<()> {
+    let text = normalize(&fs::read_to_string(manifest)?);
+    let header = "[dependencies]";
+    let mut lines: Vec<String> = text.split_inclusive('\n').map(|line| line.to_string()).collect();
+    let mut declared = String::with_capacity(dependencies.len() * 64);
+    for dependency in dependencies.iter().copied() {
+        let existing = declared.clone();
+        let target = normalized_package(dependency.package);
+        lines.retain(|line| {
+            if edge_package(line).is_some_and(|reached| normalized_package(&reached) == target) {
+                return false;
+            }
+            !declares_a_seam_beside(line, dependency.path)
+        });
+        if !declares_a_package(&existing, &target) && !declares_a_key(&existing, &dependency.declared_name()) {
+            declared.push_str(&inline_dependency(dependency, manifest));
+        }
+    }
+    if declared.is_empty() {
+        return Ok(());
+    }
+    let at = lines.iter().position(|line| line.trim_end() == header);
+    match at {
+        Some(at) => {
+            let mut end = at + 1;
+            while end < lines.len() && !lines[end].trim_start().starts_with('[') {
+                end += 1;
+            }
+            if !lines[end - 1].ends_with('\n') {
+                lines[end - 1].push('\n');
+            }
+            lines.insert(end, declared);
+        }
+        None => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "{header} is absent from {}, so the seam dependency has no section to land in",
+                    manifest.display()
+                ),
+            ));
+        }
+    }
+    let landed = lines.concat();
+    write_in_place(manifest, landed.into_bytes(), footprint)?;
+    Ok(())
+}
+
+fn declares_a_seam_beside(line: &str, path: &str) -> bool {
+    line.contains(&format!("path = \"{path}\""))
+}
+
+fn declares_a_package(text: &str, target: &str) -> bool {
+    text.lines()
+        .any(|line| edge_package(line).is_some_and(|reached| normalized_package(&reached) == target))
+}
+
+fn declares_a_key(text: &str, key: &str) -> bool {
+    text.lines().any(|line| edge_key(line).is_some_and(|held| held == key))
+}
+
+fn inline_dependency(dependency: &rules::SeamDependency, manifest: &Path) -> String {
+    let derived = workspace_root_path().map(|root| root.join(dependency.path));
+    let landed = derived.as_ref().filter(|path| path.is_file());
+    let crate_dir = match landed {
+        Some(file) => file.parent().map(Path::to_path_buf).unwrap_or_else(|| file.clone()),
+        None => match derived {
+            Some(path) => path,
+            None => match manifest.parent() {
+                Some(dir) => dir.join(dependency.path),
+                None => PathBuf::from(dependency.path),
+            },
+        },
+    };
+    let relative = if dependency.path.starts_with('.') {
+        dependency.path.to_string()
+    } else if dependency.declared.is_empty() && !dependency.package.starts_with("lvpa-") {
+        relative_manifest_path(crate_dir.as_path(), manifest)
+    } else {
+        match workspace_root_path() {
+            Some(root) => manifest_spec_path(root.as_path(), crate_dir.as_path()),
+            None => relative_manifest_path(crate_dir.as_path(), manifest),
+        }
+    };
+    dependency.line(&relative)
+}
+
+fn manifest_spec_path(root: &Path, crate_dir: &Path) -> String {
+    let relative = match crate_dir.strip_prefix(root) {
+        Ok(relative) => relative.to_path_buf(),
+        Err(_) => crate_dir.to_path_buf(),
+    };
+    let text = relative.display().to_string().replace('\\', "/");
+    if text.is_empty() {
+        ".".to_string()
+    } else {
+        text
+    }
+}
+
+fn relative_manifest_path(crate_dir: &Path, manifest: &Path) -> String {
+    let Some(manifest_dir) = manifest.parent() else {
+        return crate_dir.display().to_string().replace('\\', "/");
+    };
+    let crate_dir = if crate_dir.is_absolute() {
+        crate_dir.to_path_buf()
+    } else {
+        manifest_dir.join(crate_dir)
+    };
+    let crate_dir = crate_dir.as_path();
+    let mut common = manifest_dir.components().count();
+    while common > 0 {
+        let prefix: PathBuf = manifest_dir.components().take(common).collect();
+        if crate_dir.starts_with(&prefix) {
+            break;
+        }
+        common -= 1;
+    }
+    let mut out = String::new();
+    for _ in common..manifest_dir.components().count() {
+        out.push_str("../");
+    }
+    let tail: PathBuf = crate_dir.components().skip(common).collect();
+    out.push_str(&tail.display().to_string().replace('\\', "/"));
+    if out.is_empty() {
+        out.push('.');
+    }
+    out
 }
 
 fn landing_miss(source: &Path, module: &str, detail: &str) -> std::io::Error {
@@ -524,45 +1012,65 @@ fn land_seam_source(text: &str, source: &Path, module: &str) -> std::io::Result<
 }
 
 fn reanchor_seam_crate_paths(text: &str, module: &str) -> String {
-    let prefix = format!("crate::{module}::");
     let mut out = String::with_capacity(text.len() + 64);
     let mut rest = text;
     while let Some(index) = rest.find("crate::") {
         out.push_str(&rest[..index]);
-        let after = &rest[index + "crate::".len()..];
-        let skip = format!("{module}::");
-        if after.starts_with(&skip) {
-            rest = &after[skip.len()..];
+        rest = &rest[index + "crate::".len()..];
+        let own = format!("{module}::");
+        if rest.starts_with(&own) {
+            rest = &rest[own.len()..];
+            out.push_str("crate::");
         } else {
-            rest = after;
+            out.push_str(&format!("crate::{module}::"));
         }
-        out.push_str(&prefix);
     }
     out.push_str(rest);
     out
 }
 
 fn write_in_place(path: &Path, bytes: Vec<u8>, footprint: &mut Footprint) -> std::io::Result<()> {
+    save_before_write(path, footprint)?;
+    let mut file = fs::File::create(path)?;
+    std::io::Write::write_all(&mut file, &bytes)?;
+    std::io::Write::flush(&mut file)?;
+    drop(file);
+    let held = fs::read(path).unwrap_or_default();
+    if held != bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!(
+                "{} holds {} bytes right after {} were written, so the tree under it is not the file this pass wrote",
+                path.display(),
+                held.len(),
+                bytes.len()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn save_before_write(path: &Path, footprint: &mut Footprint) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         create_dir_recording(dir, footprint)?;
     }
-    if !footprint.files.iter().any(|saved| saved.path == path) {
-        match fs::read(path) {
-            Ok(original) => footprint.files.push(Restored {
-                path: path.to_path_buf(),
-                original: Some(original),
-            }),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                footprint.files.push(Restored {
-                    path: path.to_path_buf(),
-                    original: None,
-                });
-            }
-            Err(error) => return Err(error),
-        }
+    if footprint.files.iter().any(|saved| saved.path == path) {
+        return Ok(());
     }
-    refresh_live_record(footprint)?;
-    fs::write(path, bytes)
+    match fs::read(path) {
+        Ok(original) => footprint.files.push(Restored {
+            path: path.to_path_buf(),
+            original: Some(original),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            footprint.files.push(Restored {
+                path: path.to_path_buf(),
+                original: None,
+            });
+        }
+        Err(error) => return Err(error),
+    }
+    refresh_live_record(footprint)
 }
 
 fn create_dir_recording(dir: &Path, footprint: &mut Footprint) -> std::io::Result<()> {
@@ -590,56 +1098,10 @@ fn strip_unc(path: PathBuf) -> PathBuf {
     }
 }
 
-fn unit_of(crate_src: &Path, args: &[String]) -> rules::RuleUnit {
-    let is_src = crate_src
-        .file_name()
-        .map(|name| name == "src")
-        .unwrap_or(false);
-    if is_src {
-        return if is_test_build(args) {
-            rules::RuleUnit::UnitTest
-        } else {
-            rules::RuleUnit::Library
-        };
-    }
-    if crate_src
-        .file_name()
-        .map(|name| name == "tests")
-        .unwrap_or(false)
-    {
-        return rules::RuleUnit::TestTarget;
-    }
-    rules::RuleUnit::NonLibrary
-}
-
-fn is_test_build(args: &[String]) -> bool {
-    let is_test_cfg = |value: &str| value == "test" || value.trim_end_matches(')').ends_with(",test");
-    for (index, arg) in args.iter().enumerate() {
-        if arg == "--test" {
-            return true;
-        }
-        if let Some(body) = arg.strip_prefix("--cfg=") {
-            if is_test_cfg(body) {
-                return true;
-            }
-        } else if arg == "--cfg" {
-            if let Some(next) = args.get(index + 1) {
-                if is_test_cfg(next) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-pub fn rewrite_text(
-    path: &Path,
-    rule: &Rule,
-    previous: Option<&str>,
-) -> std::io::Result<Option<String>> {
-    let applied = apply_rule(path, rule, previous)?;
-    Ok(applied.applied.then_some(applied.text))
+pub enum Resolution {
+    Rewritten(String),
+    NotApplicable,
+    AnchorMissing,
 }
 
 pub struct Applied {
@@ -647,90 +1109,145 @@ pub struct Applied {
     pub applied: bool,
 }
 
-pub fn apply_rule(path: &Path, rule: &Rule, previous: Option<&str>) -> std::io::Result<Applied> {
-    let source = match previous {
-        Some(text) => text.to_string(),
-        None => fs::read_to_string(path)?,
-    };
+pub fn rewrite_text(
+    path: &Path,
+    rule: &Rule,
+    previous: Option<&str>,
+) -> std::io::Result<Resolution> {
+    resolve(path, rule, previous)
+}
+
+pub fn apply_rule(
+    path: &Path,
+    rule: &Rule,
+    previous: Option<&str>,
+) -> std::io::Result<Applied> {
+    let resolved = resolve(path, rule, previous)?;
+    Ok(match resolved {
+        Resolution::Rewritten(text) => Applied {
+            text,
+            applied: true,
+        },
+        Resolution::NotApplicable | Resolution::AnchorMissing => Applied {
+            text: read_source(path, previous)?,
+            applied: false,
+        },
+    })
+}
+
+fn read_source(path: &Path, previous: Option<&str>) -> std::io::Result<String> {
+    match previous {
+        Some(text) => Ok(text.to_string()),
+        None => fs::read_to_string(path),
+    }
+}
+
+fn resolve(
+    path: &Path,
+    rule: &Rule,
+    previous: Option<&str>,
+) -> std::io::Result<Resolution> {
+    let source = read_source(path, previous)?;
     let crlf = source.contains("\r\n");
     let current = normalize(&source);
 
     let resolved = match &rule.locate {
-        Locate::Composition(envelope) => match rule_seam(rule) {
-            Some(seam) => match crate::rules::composition::commands(&current) {
-                Some(commands) => {
-                    let table = crate::rules::composition::embed(
-                        seam.host.as_str_checked(),
-                        &commands,
-                    );
-                    match table {
-                        Some(body) => {
-                            let landed = write_seam_table(seam, &body)?;
-                            let landed = landed.to_string_lossy().into_owned();
-                            crate::rules::composition::wrap(&current, &landed, envelope)
-                                .map(|composition| composition.text)
-                        }
-                        None => None,
-                    }
+        Locate::Composition(composition) => {
+            let crate::rules::composition::Composition::Envelope {
+                envelope,
+                entry,
+                ..
+            } = composition;
+            let seam = match rule_seam(rule) {
+                Some(seam) => seam,
+                None => unreachable_landing(
+                    crate_src_of(path),
+                    Some(rule),
+                    "the seam it is written for is not in the rule table",
+                ),
+            };
+            let carried = match workspace_root_path() {
+                Some(root) => root.join(seam.host.as_str_checked()).to_string_lossy().into_owned(),
+                None => unreachable_landing(
+                    crate_src_of(path),
+                    Some(rule),
+                    "the workspace root did not resolve, so the seam body cannot be read",
+                ),
+            };
+            match crate::rules::composition::wrap(&current, &carried, envelope, entry) {
+                crate::semantic::Nesting::Landed(composed) => {
+                    crate::rules::Landed::Rewritten(composed.text)
                 }
-                None => None,
-            },
-            None => None,
-        },
+                crate::semantic::Nesting::NoSuchSeam => crate::rules::Landed::NotApplicable,
+                crate::semantic::Nesting::AnchorGone(_) => crate::rules::Landed::AnchorMissing,
+            }
+        }
+        Locate::Completion(completion) => {
+            let exports = workspace_root_path()
+                .and_then(|root| fs::read_to_string(root.join(completion.exports)).ok());
+            match exports {
+                Some(exports) => crate::rules::completion::wrap(&current, completion, &exports),
+                None => crate::rules::Landed::AnchorMissing,
+            }
+        }
+        Locate::Rename(rename) => crate::rules::rename::rename(&current, rename),
     };
 
-    let Some(rewritten) = resolved else {
-        return Ok(Applied {
-            text: source,
-            applied: false,
-        });
-    };
-
-    Ok(Applied {
-        text: if crlf {
+    Ok(match resolved {
+        crate::rules::Landed::Rewritten(rewritten) => Resolution::Rewritten(if crlf {
             rewritten.replace('\n', "\r\n")
         } else {
             rewritten
-        },
-        applied: true,
+        }),
+        crate::rules::Landed::NotApplicable => Resolution::NotApplicable,
+        crate::rules::Landed::AnchorMissing => Resolution::AnchorMissing,
     })
 }
 
+fn crate_src_of(path: &Path) -> &Path {
+    path.parent().unwrap_or(path)
+}
+
 fn rule_seam(rule: &Rule) -> Option<&'static rules::Seam> {
+    let module = rule_seam_module(rule)?;
+    rules::registered()
+        .into_iter()
+        .flat_map(|spec| spec.seams.iter())
+        .find(|seam| seam.module == module)
+}
+
+fn rule_seam_module(rule: &Rule) -> Option<&'static str> {
     match &rule.locate {
-        Locate::Composition(envelope) => rules::registered()
-            .into_iter()
-            .flat_map(|spec| spec.seams.iter())
-            .find(|seam| seam.host.as_str_checked() == envelope.host),
-    }
-}
-
-fn write_seam_table(seam: &rules::Seam, body: &str) -> std::io::Result<PathBuf> {
-    let Some(root) = workspace_root_path() else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "the workspace root could not be resolved, so the seam table has nowhere to land",
-        ));
-    };
-    let module_root = root.join(seam.body.as_str_checked());
-    let module_dir = match module_root.parent() {
-        Some(dir) => dir,
-        None => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "the seam body has no directory to land its table beside",
-            ))
+        Locate::Composition(crate::rules::composition::Composition::Envelope { seam, .. }) => {
+            Some(seam)
         }
-    };
-    let landed = module_dir.join("table.rs");
-    fs::write(&landed, body)?;
-    Ok(landed)
+        Locate::Completion(completion) => Some(completion.seam),
+        Locate::Rename(_) => None,
+    }
 }
 
-fn rule_unit(rule: &Rule) -> rules::RuleUnit {
-    match rule.locate {
-        Locate::Composition(_) => rules::RuleUnit::Any,
-    }
+fn seam_is_landed(crate_src: &Path, rule: &Rule) -> bool {
+    let Some(module) = rule_seam_module(rule) else {
+        return true;
+    };
+    let seam = rules::registered()
+        .into_iter()
+        .flat_map(|spec| spec.seams.iter())
+        .find(|seam| seam.module == module);
+    let Some(seam) = seam else {
+        return false;
+    };
+    seam.seeds.iter().all(|seed_at| {
+        let decl = crate_src.join(seed_at);
+        let seed = match decl.parent() {
+            Some(dir) => dir.join(module).join("mod.rs"),
+            None => return false,
+        };
+        seed.is_file()
+            && fs::read_to_string(&decl)
+                .map(|text| modules_of(&text).iter().any(|name| name == module))
+                .unwrap_or(false)
+    })
 }
 
 pub fn normalize(text: &str) -> String {
@@ -753,6 +1270,14 @@ pub fn restore(report: &Report) {
     }
     if let Some(record) = &report.record {
         retire_record(record);
+    }
+    release_injection_locks();
+}
+
+fn release_injection_locks() {
+    let mut held: Vec<InjectionLock> = LIVE_LOCKS.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+    for lock in held.iter_mut() {
+        lock.release();
     }
 }
 
@@ -867,16 +1392,15 @@ fn take_run_lock(dir: &Path) -> std::io::Result<()> {
 }
 
 fn take_injection_lock(crate_src: &Path) -> std::io::Result<InjectionLock> {
-    let Some(root) = seam_record_dir() else {
-        return Ok(InjectionLock { file: None });
-    };
-    fs::create_dir_all(&root)?;
     let path = injection_lock_path(crate_src).ok_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            "the record directory disappeared between being created and the lock being placed",
+            "the record directory could not be resolved, so no lock can be placed for this crate",
         )
     })?;
+    if let Some(root) = path.parent() {
+        fs::create_dir_all(root)?;
+    }
     let file = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -884,11 +1408,16 @@ fn take_injection_lock(crate_src: &Path) -> std::io::Result<InjectionLock> {
         .truncate(false)
         .open(&path)?;
     file.lock()?;
-    Ok(InjectionLock { file: Some(file) })
+    Ok(InjectionLock {
+        path: Some(path),
+        file: Some(file),
+    })
 }
 
 fn injection_lock_path(crate_src: &Path) -> Option<PathBuf> {
-    seam_record_dir().map(|root| root.join(format!("{SEAM_INJECTION_LOCK}{}", crate_key(crate_src))))
+    let key = crate_key(crate_src);
+    let name = format!("{SEAM_INJECTION_LOCK}{key}{SEAM_RUN_LOCK_SUFFIX}");
+    seam_record_dir().map(|root| root.join(name))
 }
 
 fn crate_key(crate_src: &Path) -> String {
@@ -900,14 +1429,24 @@ fn crate_key(crate_src: &Path) -> String {
 }
 
 struct InjectionLock {
+    path: Option<PathBuf>,
     file: Option<fs::File>,
+}
+
+impl InjectionLock {
+    fn release(&mut self) {
+        if let Some(file) = self.file.take() {
+            let _ = file.unlock();
+        }
+        if let Some(path) = self.path.take() {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 impl Drop for InjectionLock {
     fn drop(&mut self) {
-        if let Some(file) = &self.file {
-            let _ = file.unlock();
-        }
+        self.release();
     }
 }
 
@@ -939,10 +1478,11 @@ fn finish_run() {
             let _ = fs::remove_file(&run.path);
         }
     });
+    release_injection_locks();
 }
 
 fn begin_run() -> std::io::Result<()> {
-    if run_is_announced() {
+    if run_is_announced() || !writes_a_covered_crate() {
         return Ok(());
     }
     let Some(dir) = seam_record_dir() else {
@@ -956,6 +1496,27 @@ fn begin_run() -> std::io::Result<()> {
         *cell.borrow_mut() = Some(LiveRun { path });
     });
     Ok(())
+}
+
+fn writes_a_covered_crate() -> bool {
+    covered_crate_root().is_some()
+}
+
+fn covered_crate_root() -> Option<PathBuf> {
+    let mut roots: Vec<String> = std::env::args().skip(1).collect();
+    roots.reverse();
+    let root = roots.into_iter().find(|arg| arg.ends_with(".rs") && !arg.starts_with('-'))?;
+    let source = PathBuf::from(root);
+    let source = match fs::canonicalize(&source) {
+        Ok(abs) => strip_unc(abs),
+        Err(_) => source,
+    };
+    let crate_src = source.parent()?.to_path_buf();
+    let subject = crate_src.to_string_lossy().replace('\\', "/");
+    match rules::cover(&subject) {
+        rules::Coverage::Claimed(_) => Some(crate_src),
+        _ => None,
+    }
 }
 
 fn run_is_announced() -> bool {
@@ -991,6 +1552,7 @@ struct LiveRun {
 
 thread_local! {
     static LIVE_RUN: std::cell::RefCell<Option<LiveRun>> = const { std::cell::RefCell::new(None) };
+    static LIVE_LOCKS: std::cell::RefCell<Vec<InjectionLock>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 fn refresh_live_record(footprint: &Footprint) -> std::io::Result<()> {
@@ -1003,34 +1565,23 @@ fn refresh_live_record(footprint: &Footprint) -> std::io::Result<()> {
 }
 
 fn seam_record_dir() -> Option<PathBuf> {
-    if let Some(target) = std::env::var_os("CARGO_TARGET_DIR") {
+    if let Some(target) = std::env::var_os(CARGO_TARGET_DIR_ENV) {
         let target = PathBuf::from(target);
         if !target.as_os_str().is_empty() {
             return Some(target.join(SEAM_RUN_RECORD_DIR));
         }
     }
-    workspace_root_path().map(|root| root.join(".openlvpa").join(SEAM_RUN_RECORD_DIR))
-}
-
-fn seam_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(root) = workspace_root_path() {
-        roots.push(root);
-    }
-    if let Ok(compilation) = env::var(CARGO_TARGET_DIR_ENV) {
-        let dir = PathBuf::from(&compilation);
-        let dir = if dir.is_absolute() {
-            dir
-        } else {
-            env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join(dir)
-        };
-        if let Ok(canonical) = fs::canonicalize(&dir) {
-            roots.push(strip_unc(canonical));
+    match workspace_root_path() {
+        Some(root) => Some(root.join("target").join(SEAM_RUN_RECORD_DIR)),
+        None => {
+            eprintln!(
+                "[lvpa-wrapper] FATAL: the workspace root could not be resolved and no {CARGO_TARGET_DIR_ENV} names \
+                 where this run records what it writes, so a write it could not take back would stand. Nothing is \
+                 rewritten."
+            );
+            exit(97);
         }
     }
-    roots
 }
 
 const CARGO_TARGET_DIR_ENV: &str = "CARGO_TARGET_DIR";
@@ -1038,8 +1589,6 @@ const CARGO_TARGET_DIR_ENV: &str = "CARGO_TARGET_DIR";
 fn record_name() -> String {
     format!("{}.json", std::process::id())
 }
-
-const SEAM_RUN_RECORD: &str = "lvpa-seam-run.json";
 
 pub const SEAM_RUN_RECORD_DIR: &str = "lvpa-seam-run";
 
@@ -1103,22 +1652,6 @@ fn base64_decode(text: &str) -> Option<Vec<u8>> {
 
 fn outstanding_records() -> Vec<PathBuf> {
     let mut records = Vec::new();
-    for root in seam_roots() {
-        let legacy = root.join("target").join(SEAM_RUN_RECORD);
-        if legacy.is_file() {
-            records.push(legacy);
-        }
-        let Ok(entries) = fs::read_dir(root.join("target").join(SEAM_RUN_RECORD_DIR)) else {
-            continue;
-        };
-        let mut found: Vec<PathBuf> = entries
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "json"))
-            .collect();
-        found.sort();
-        records.extend(found);
-    }
     let Some(dir) = seam_record_dir() else {
         return records;
     };
