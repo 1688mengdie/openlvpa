@@ -3,6 +3,7 @@ obf/
 openalgo-desktop/
 
 # 编译与安装产物
+.lvpa/
 target/
 node_modules/
 dist/

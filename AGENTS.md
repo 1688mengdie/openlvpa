@@ -105,7 +105,7 @@ PR 须链 issue，正文首行 `Closes #<issue号>`；无 issue 的 PR 一律打
 
 ## 3.4 工作区
 
-源码与最终产物在 `E:\openlvpa`。`target/`、`node_modules/`、worktree 等编译与安装副产物一律指至 G 盘，以环境变量指定，用完即消融，不留 E 盘。仓内可删仅限 `target/`、`.vite*`、`*.tmp`、`.openlvpa/`、探针临时件、测试即弃的 `out/`、取用残留目录。
+源码与最终产物在 `E:\openlvpa`。编译产物、安装产物、取件暂存一律落仓根工作根 `.lvpa/`（`target/`、`node_modules/`、pnpm 存、取件与合成两处暂存同在这一根之下），由环境变量指向仓根，用完即消融；不落仓外固定盘，不落 E 盘之外。运行时数据与 MiniApp 落位只落用户配置目录。`.lvpa/` 在 `.gitignore` 整层挡下，仓内可删仅限 `.lvpa/`、`target/`、`node_modules/`、`.openlvpa/`、`.vite*`、`*.tmp`、探针临时件、测试即弃的 `out/`、取用残留目录。
 
 ## 3.5 令文
 
