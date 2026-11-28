@@ -15,6 +15,8 @@ const I18N_MODULE = 'src/i18n/index.ts';
 
 const BUILT_APP_DIR = 'app';
 
+const FRONTEND_WORKSPACE = 'lvpa-frontend';
+
 const WORKSPACE_ESCAPES = ['--ignore-workspace', '--lockfile=false', '--no-lockfile'];
 
 export function fail(message) {

@@ -36,7 +36,7 @@ pub const SURFACES: &[Surface] = &[
     },
     Surface {
         name: "window_proof",
-        bind: Bind::Checked,
+        bind: Bind::RunnerWindow,
     },
     Surface {
         name: "restart_to_update",
@@ -48,36 +48,42 @@ pub fn surface(name: &str) -> Option<&'static Surface> {
     SURFACES.iter().find(|surface| surface.name == name)
 }
 
-pub fn permitted(name: &str, runner_window: bool) -> bool {
+pub fn permitted(name: &str, window: &str) -> bool {
     match surface(name) {
-        Some(surface) if surface.bind == Bind::RunnerWindow => runner_window,
+        Some(surface) if surface.bind == Bind::RunnerWindow => window == "runner",
         Some(_) => true,
         None => false,
     }
 }
 
-pub struct Seam {
-    pub next: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync>,
-    pub refused: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+pub fn refuse(command: &str, window: &str) -> Option<String> {
+    match permitted(command, window) {
+        true => None,
+        false => Some(format!(
+            "the window {window} is not granted the surface {command}"
+        )),
+    }
 }
 
-impl Seam {
-    pub fn call(&self, invoke: tauri::ipc::Invoke<tauri::Wry>) -> bool {
-        let runner_window = invoke.message.webview().window().label() == "runner";
-        if !permitted(invoke.message.command(), runner_window) {
+pub mod seam {
+    use super::permitted;
+
+    pub struct Seam<N> {
+        pub window_proof: N,
+    }
+
+    pub fn open<N>(held: Seam<N>) -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static
+    where
+        N: Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static,
+    {
+        move |invoke| {
             let command = invoke.message.command().to_string();
-            match self.refused.lock() {
-                Ok(mut refused) => refused.push(command.clone()),
-                Err(poisoned) => poisoned.into_inner().push(command.clone()),
+            let window = invoke.message.webview().window().label().to_string();
+            if permitted(&command, &window) {
+                return (held.window_proof)(invoke);
             }
-            invoke.resolver.reject(format!(
-                "the runner window is not granted that surface: {command}"
-            ));
-            eprintln!(
-                "[lvpa-seam] refused {command}: reached from a window the surface does not bind"
-            );
-            return true;
+            invoke.resolver.reject("the window is not granted this surface");
+            true
         }
-        (self.next)(invoke)
     }
 }

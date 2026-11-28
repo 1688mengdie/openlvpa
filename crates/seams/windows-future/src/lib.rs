@@ -11,13 +11,6 @@ pub mod get {
         fn value(self) -> Result<Self::Output>;
     }
 
-    pub fn value<T>(operation: T) -> Result<T::Output>
-    where
-        T: Completion,
-    {
-        Completion::value(operation)
-    }
-
     impl<T: RuntimeType> Completion for IAsyncOperation<T> {
         type Output = T;
 

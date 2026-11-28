@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { targetPath } from './target-dir.mjs';
+import { targetDir, targetPath } from './target-dir.mjs';
 
 export const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 export const SHELL_CRATE = join(REPO_ROOT, 'obf', 'src', 'apps', 'desktop');
@@ -120,8 +120,8 @@ function launcher(directory) {
 export function tauriCli() {
   const version = resolvedTauriVersion();
   const held = [
-    join(REPO_ROOT, 'node_modules', ...CLI.split('/')),
-    join(REPO_ROOT, 'node_modules', '.pnpm', `${CLI.replace('/', '+')}@${version}`, 'node_modules', ...CLI.split('/')),
+    join(targetDir(), 'lvpa-node-modules', ...CLI.split('/')),
+    join(targetDir(), 'lvpa-node-modules', '.pnpm', `${CLI.replace('/', '+')}@${version}`, 'node_modules', ...CLI.split('/')),
   ];
   for (const directory of held) {
     const named = launcher(directory);
