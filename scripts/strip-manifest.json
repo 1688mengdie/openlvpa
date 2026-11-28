@@ -17,12 +17,23 @@
     "Cargo.lock",
     "pnpm-workspace.yaml",
     "pnpm-lock.yaml",
+    "pnpm-lock.yml",
     "package-lock.json",
     "yarn.lock",
     "bun.lock",
     "bun.lockb",
     "npm-shrinkwrap.json",
     ".npmrc"
+  ],
+  "lockFileNames": [
+    "Cargo.lock",
+    "pnpm-lock.yaml",
+    "pnpm-lock.yml",
+    "package-lock.json",
+    "yarn.lock",
+    "bun.lock",
+    "bun.lockb",
+    "npm-shrinkwrap.json"
   ],
   "excludedDirNames": [
     ".git",
