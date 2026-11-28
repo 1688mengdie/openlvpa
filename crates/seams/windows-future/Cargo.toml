@@ -1,0 +1,13 @@
+[package]
+name = "lvpa-windows-future"
+version = "0.3.2"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+windows-core = "0.62"
+windows-future = { package = "windows-future", version = "0.3" }

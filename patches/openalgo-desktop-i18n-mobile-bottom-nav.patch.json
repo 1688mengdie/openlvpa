@@ -1,0 +1,19 @@
+{
+  "file": "openalgo-desktop/src/components/layout/MobileBottomNav.tsx",
+  "landed": "frontend: MiniApp 落位副本的 source/ 由 projectSources() 从该树 src/ 逐字节投影而来，与树内同文本，故锚在副本上唯一命中；改后的字节只进用户配置目录下的副本，取件步于树内零字节写入。",
+  "description": "The mobile bottom bar's labels read the word table. Anchors stand on the imported config line and the exported component; no anchor counts lines or offsets.",
+  "replacements": [
+    {
+      "find": "import { bottomNavItems, isActiveRoute } from '@/config/navigation'",
+      "replace": "import { bottomNavItems, isActiveRoute } from '@/config/navigation'\nimport { useWord } from '@/i18n'"
+    },
+    {
+      "find": "export function MobileBottomNav() {",
+      "replace": "export function MobileBottomNav() {\n  const word = useWord()"
+    },
+    {
+      "find": "{item.label}</span>",
+      "replace": "{word(item.label)}</span>"
+    }
+  ]
+}

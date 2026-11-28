@@ -1,0 +1,107 @@
+# The single-instance convergence: which crates the mirror graph resolves once, and why each must
+# stand once. `scripts/sync-absorbed-members.mjs` is its only reader. For each converged crate
+# holding `subtree` it reads the two trees' own declarations, writes the one range both of them
+# name, and stops when there is no such range: a range neither tree states is not a convergence.
+# For one holding `sole` it writes the `into` below, and stops unless that value is the one the
+# tree that names the crate reaches it through. `sole` says one tree names the crate and the other
+# does not, so nothing is being overruled; a crate both trees name is never `sole`, and two ranges
+# with no common version stop this step instead of one of them being chosen here. A crate the
+# table does not name stays in the manifest that states it, and both trees' declarations stand.
+# The snapshots under `scripts/*-upstream-manifest.toml` stay the trees' own words and carry none of this.
+#
+# A crate that must stand once but whose one instance is a path source is not converged either, and
+# its one instance is held by that path: [[path_held]] names the crate whose tree patch edge re-roots
+# its own copy, and that edge stands in the segment as the tree wrote it. The key does not say
+# "removed": an edge of ours is not being spoken of, and a shape whose absence cannot be told from a
+# merge that never carried it would name nothing.
+# A git edge is not named here at all. A tree's git edge is that tree's own word about where one
+# crate comes from, and the mirror carries it as the tree wrote it, so a table that named it would be
+# the table saying the mirror has no edge where the tree says it has one.
+
+[[converged]]
+crate = "webview2-com"
+into = "0.39"
+holds = "sole"
+why = "webview2-com hands out the COM types wry builds on, and one graph carries one set of them; the openalgo tree names none of them, so this entry overrules no declaration."
+
+[[converged]]
+crate = "webview2-com-sys"
+into = "0.39"
+holds = "sole"
+why = "webview2-com-sys carries the COM bindings webview2-com builds on, and the two stand and fall as one crate's pair; neither tree names it, so this entry overrules no declaration."
+
+[[converged]]
+crate = "windows"
+into = "0.62"
+holds = "subtree"
+why = "The windows crate and every windows-core it re-exports are one ABI surface, resolved once per graph."
+
+[[converged]]
+crate = "windows-core"
+into = "0.62"
+holds = "sole"
+why = "The windows crate and every windows-core it re-exports are one ABI surface, resolved once per graph; the openalgo tree names none of them."
+
+[[converged]]
+crate = "windows-future"
+into = "0.3.2"
+holds = "sole"
+why = "windows-future hands out the future types windows-core builds on, and one graph carries one set of them; neither tree names it."
+
+[[converged]]
+crate = "tauri"
+into = "2"
+holds = "subtree"
+why = "Tauri publishes one runtime per process and the window crates it hands out are typed by it, so both trees' declarations must name one set of versions."
+
+[[converged]]
+crate = "tauri-runtime"
+into = "2"
+holds = "subtree"
+why = "wry builds the runtime tauri-runtime is, so one runtime per process means one range for it across both trees."
+
+[[converged]]
+crate = "tauri-runtime-wry"
+into = "2"
+holds = "subtree"
+why = "tauri-runtime-wry is the one place a runtime and a wry meet, so one runtime per process means one range for it across both trees."
+
+[[converged]]
+crate = "tauri-utils"
+into = "2"
+holds = "subtree"
+why = "tauri-utils is a build input both trees' build scripts read, so a second copy is a second reading of one config."
+
+[[converged]]
+crate = "tauri-build"
+into = "2"
+holds = "subtree"
+why = "tauri-build is the shell's own build step and it is in both trees' build-dependency lists, so one copy stands for both."
+
+[[converged]]
+crate = "tauri-plugin-dialog"
+into = "2"
+holds = "subtree"
+why = "A Tauri plugin registers against one runtime and both trees name this one at the same time, so one range stands for the two."
+
+[[converged]]
+crate = "tauri-plugin-updater"
+into = "2"
+holds = "subtree"
+why = "A Tauri plugin registers against one runtime and both trees name this one at the same time, so one range stands for the two."
+
+[[path_held]]
+crate = "screenshots"
+why = "The tree's own patch edge re-roots its fork at a path, and that one instance is what the path holds."
+
+[[path_held]]
+crate = "tao"
+why = "The tree's own patch edge re-roots its fork at a path, and that one instance is what the path holds."
+
+[[path_held]]
+crate = "wry"
+why = "The tree's own patch edge re-roots its fork at a path, and that one instance is what the path holds."
+
+[[path_held]]
+crate = "eioc"
+why = "The tree's own patch edge re-roots its fork at a path, and that one instance is what the path holds."

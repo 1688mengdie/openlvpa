@@ -3,12 +3,16 @@ obf/
 openalgo-desktop/
 
 # 编译与安装产物
+.lvpa/
 target/
 node_modules/
 dist/
 *.tsbuildinfo
+crates/seams/rustc-wrapper/bin/
+.lvpa-seam-run/
 
 # 运行时与临时
 .openlvpa/
 *.log
 *.tmp
+.openbitfun/

@@ -1,4 +1,8 @@
-# 许可证原文按字节原样存放，任何平台都不得转换换行
-LICENSE text eol=lf
-LICENSE-MIT text eol=lf
-NOTICE text eol=lf
+
+# [upstream-sync] absorbed byte fidelity: obf (generated; do not edit by hand)
+obf/** -text
+# [upstream-sync] absorbed byte fidelity: obf end
+# [upstream-sync] absorbed byte fidelity: openalgo-desktop (generated; do not edit by hand)
+openalgo-desktop/** -text
+# [upstream-sync] absorbed byte fidelity: openalgo-desktop end
+

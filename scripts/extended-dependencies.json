@@ -1,0 +1,14 @@
+{
+  "_comment": "The edges this repository lands in an absorbed tree's own card at the series the graph resolves. `crate` names the package whose card states the edge, `package` is the key that card writes, `version` is the series landed there, `features` are laid over the ones the card already wrote, and `scope` names a table opened in a card that states the key under no table of its own. A row stands here only for a crate whose own `Cargo.toml` states `links`: that name is what the linker reads, so the graph admits one package per name and the series a tree wrote must move to the one the other tree reaches. Every other crate keeps the series its tree wrote, and no row here states it a second time: `sqlx` and `rusqlite` reach the native library through `libsqlite3-sys`, and it is `libsqlite3-sys` that stands once. The edge is written by the wrapper before cargo reads the graph and put back after, so not one byte of it stands in the tree between passes.",
+  "relay-service": [
+    {
+      "crate": "openbitfun-relay-service",
+      "package": "libsqlite3-sys",
+      "version": "0.30",
+      "features": [
+        "bundled"
+      ],
+      "scope": "dependencies.libsqlite3-sys"
+    }
+  ]
+}

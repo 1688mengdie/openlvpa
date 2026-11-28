@@ -1,0 +1,21 @@
+[package]
+name = "lvpa-rustc-wrapper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "lvpa-rustc-wrapper"
+path = "src/main.rs"
+
+[[bin]]
+name = "lvpa-capability-panorama"
+path = "src/bin/capability-panorama.rs"
+
+[dependencies]
+syn = { workspace = true, features = ["visit", "full", "parsing", "printing", "proc-macro", "derive"] }
+proc-macro2 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

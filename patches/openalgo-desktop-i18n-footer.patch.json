@@ -1,0 +1,31 @@
+{
+  "file": "openalgo-desktop/src/components/layout/Footer.tsx",
+  "landed": "frontend: MiniApp 落位副本的 source/ 由 projectSources() 从该树 src/ 逐字节投影而来，与树内同文本，故锚在副本上唯一命中；改后的字节只进用户配置目录下的副本，取件步于树内零字节写入。",
+  "description": "The footer's fixed strings read the word table. Anchors stand on the import of the button it renders, the exported component, and the exported element each fixed string sits in; no anchor carries a year, an offset or the whitespace around the text it names.",
+  "replacements": [
+    {
+      "find": "import { Button } from '@/components/ui/button'",
+      "replace": "import { Button } from '@/components/ui/button'\nimport { useWord } from '@/i18n'"
+    },
+    {
+      "find": "export function Footer({ className }: FooterProps) {",
+      "replace": "export function Footer({ className }: FooterProps) {\n  const word = useWord()"
+    },
+    {
+      "find": "<span>Copyright ",
+      "replace": "<span>{word('footer.copyright')}"
+    },
+    {
+      "find": "2026</span>",
+      "replace": "</span>"
+    },
+    {
+      "find": ">Open Source Algo Platform for Everyone<",
+      "replace": ">{word('footer.tagline')}<"
+    },
+    {
+      "find": "{activeSessionCount === 1 ? 'session' : 'sessions'}",
+      "replace": "{word(activeSessionCount === 1 ? 'footer.session.one' : 'footer.session.other')}"
+    }
+  ]
+}
