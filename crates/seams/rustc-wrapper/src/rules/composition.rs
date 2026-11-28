@@ -7,7 +7,6 @@ pub enum Composition {
         envelope: &'static str,
         seam: &'static str,
         entry: &'static str,
-        site: &'static str,
     },
 }
 
@@ -173,13 +172,8 @@ pub fn wrap(
     carried: &str,
     envelope: &'static str,
     entry: &'static str,
-    site: &'static str,
 ) -> crate::semantic::Nesting {
-    let nest = crate::semantic::Nest {
-        envelope,
-        entry,
-        site,
-    };
+    let nest = crate::semantic::Nest { envelope, entry };
     crate::semantic::nest(text, &carried_path(carried), &nest)
 }
 

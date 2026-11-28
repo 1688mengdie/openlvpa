@@ -1,24 +1,58 @@
 use std::path::Path;
 
-use super::{SeamDependency, SeamSeed};
-
 const IDENTITY: &str = "scripts/landing-identity.toml";
 
 pub struct Named {
-    pub index: &'static str,
-    pub owner: &'static str,
-    pub declared: &'static str,
-    pub package: &'static str,
-    pub version: &'static str,
+    pub index: String,
+    pub owner: String,
+    pub declared: String,
+    pub package: String,
+    pub version: String,
 }
 
-pub const NAMES: &[Named] = &[Named {
-    index: "windows",
-    owner: "openbitfun-computer-use",
-    declared: "windows",
-    package: "windows",
-    version: "0.62",
-}];
+fn field(line: &str, key: &str) -> Option<String> {
+    let value = line.trim().strip_prefix(key)?.trim_start().strip_prefix('=')?.trim();
+    Some(value.trim_matches(|one| one == '"' || one == '\'').to_string())
+}
+
+fn named(text: &str) -> Vec<Named> {
+    let mut out: Vec<Named> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            out.push(Named {
+                index: String::new(),
+                owner: String::new(),
+                declared: String::new(),
+                package: String::new(),
+                version: String::new(),
+            });
+            continue;
+        }
+        let Some(entry) = out.last_mut() else {
+            continue;
+        };
+        for key in ["index", "owner", "declared", "package", "version"] {
+            if let Some(value) = field(line, key) {
+                match key {
+                    "index" => entry.index = value,
+                    "owner" => entry.owner = value,
+                    "declared" => entry.declared = value,
+                    "package" => entry.package = value,
+                    _ => entry.version = value,
+                }
+            }
+        }
+    }
+    out
+}
+
+pub fn identity() -> Result<Vec<Named>, String> {
+    Ok(named(&read_identity()?))
+}
 
 fn read(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|error| {
@@ -46,12 +80,11 @@ pub fn read_identity() -> Result<String, String> {
 }
 
 fn crate_root_of(host: &Path) -> Result<std::path::PathBuf, String> {
-    let crate_root = host
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .ok_or_else(|| format!("{} names no crate root to read a manifest from", host.display()))?;
-    Ok(crate_root.to_path_buf())
+    let root = host
+        .ancestors()
+        .find(|at| at.join("Cargo.toml").is_file())
+        .ok_or_else(|| format!("{} sits under no crate root", host.display()))?;
+    Ok(root.to_path_buf())
 }
 
 pub fn owner_of(host: &Path) -> Result<String, String> {
@@ -64,69 +97,3 @@ pub fn owner_of(host: &Path) -> Result<String, String> {
         .ok_or_else(|| format!("{} names no package", manifest.display()))
 }
 
-pub fn crate_root_names(host: &Path) -> Result<String, String> {
-    let root = crate_root_of(host)?.join("src/lib.rs");
-    read(&root)
-}
-
-pub fn hold(
-    dependencies: &[SeamDependency],
-    seed: &SeamSeed,
-    seeds: &[&str],
-    host: &Path,
-) -> Result<(), String> {
-    for dependency in dependencies {
-        if dependency.managed.adds_an_edge() {
-            return Err(format!(
-                "the seam reaches {} by adding an edge into the crate root it lands in; landing {} states every \
-                 edge that crate carries, and no second line is added beside it",
-                dependency.package,
-                read_identity()?
-            ));
-        }
-    }
-    if matches!(seed, SeamSeed::Imports) && !dependencies.is_empty() {
-        return Err(format!(
-            "the seam arrives through an import, and the import it would have to arrive over is the {} this landing \
-             already names",
-            dependencies
-                .iter()
-                .map(SeamDependency::declared_name)
-                .collect::<Vec<String>>()
-                .join(", ")
-        ));
-    }
-    if matches!(seed, SeamSeed::Module) {
-        let body = crate_root_names(host)?;
-        for name in seeds {
-            if !body.contains(&format!("mod {name}")) {
-                return Err(format!(
-                    "{} declares no `mod {name}` at the crate root it lands in, so the module this seam hands in \
-                     would be unfindable there",
-                    host.display()
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-pub fn declare(
-    index: &'static str,
-    owner: &str,
-    package: &'static str,
-    version: &'static str,
-) -> Result<&'static Named, String> {
-    let Some(named) = NAMES.iter().find(|named| named.index == index) else {
-        return Err(format!(
-            "{owner} reaches {package} and the landing identity carries no entry {index}"
-        ));
-    };
-    if owner != named.owner || package != named.package || version != named.version {
-        return Err(format!(
-            "{owner} reaches {package} {version}, and the entry this tree lands under states {} {} beside {}",
-            named.package, named.version, named.owner
-        ));
-    }
-    Ok(named)
-}
