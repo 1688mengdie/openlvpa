@@ -2,11 +2,12 @@
   "_comment": "The single source of truth for every absorbed source tree this repository takes in. Each entry names a project the host adopts: a root directory and the upstream remote and branch it is taken from, and -- under `sync` -- what that particular tree is, which a mechanism cannot know on its own. Every mechanism reads this file by entry rather than by a directory name written into its own source, so a project is added by adding one entry here and changing no mechanism, and how many entries there are is read from this array rather than stated anywhere.",
   "_snapshot": "`snapshotFile` is where the tree's own manifest is kept after the take strips the tree: it is the file the deriving arm reads members, excludes, workspace data, patch edges and profiles out of, and it is written by the take at the one moment the taken manifest exists. It is not hand-filled.",
   "_mechanismBinding": "Every consumer resolves a project through this table and never through a literal. A mechanism that spelled a tree's name in its own source would be a mechanism that recognises its source; the name belongs in this declaration and nowhere else.",
+  "_selfHosted": "A tree whose `root` is `.` stands over the host root itself, as `obf` does: the take copies the tree's bytes into the repository root and leaves `.cargo`, `.git` and `.github` behind, so the tree's card is the host manifest's, the mirror's members carry the workspace root once, and the tree's name is this declaration's own. A tree whose `root` names a directory is taken into that directory.",
   "_sync": "Each entry's `sync` block states what that tree is. `mechanism` is which of `absorbed-sources.mjs`'s `MECHANISMS` this tree is, and it pairs with `packageDirectory` the one way round: a `cargo-workspace` tree's root is a workspace root, so the crate it hands in stands at the root and the key is left out, while a `single-crate` tree's root is a crate root, so `packageDirectory` may name a crate below it and `backendPackage` names what that crate calls itself -- the member the mirror carries is that crate's own directory, and the layer the tree entered by is the shell the deshell step removes. A workspace root is not a crate after the strip, so it names no `backendPackage` and enters the mirror by the members its snapshot lists. `strippedPackageDirectory` names a directory the take gives the shell face up from: the card at its `Cargo.toml` leaves the snapshot and the directory leaves the taken tree, so the backend crate stands where the tree put it and the shell stands nowhere the mirror reads. An entry that breaks that pairing is refused. `packageManifest` is the file the take reads the tree's identity out of, written as this repository's path to that file. `buildConfigFiles` is written as paths INSIDE the declared root. `frontend` names the packages in the tree the host chain starts that tree's frontend from, each with the membership that decides where it goes: `pnpm-closure` packages are carried by the host `pnpm-workspace.yaml` together with every package they reach through a `workspace:` dependency, `mini-app-payload` packages are landed as a MiniApp instead and never enter that closure, and `own-resolver` packages are built by a resolver of their own inside the tree (the extension host is built with bun, so a pnpm membership would install it twice under two resolvers and take its tree away from the lockfile the tree decides it by).",
   "_entries": "One entry per absorbed tree, in the order the mechanisms act on them; a bare invocation acts on the first.",
   "projects": [
     {
-      "id": "obf",
+      "id": "openbitfun",
       "root": "obf",
       "url": "https://github.com/GCWing/BitFun.git",
       "branch": "main",
@@ -16,8 +17,8 @@
         "mechanism": "cargo-workspace",
         "packageManifest": "obf/package.json",
         "buildConfigFiles": [
-          "package.json",
-          "src/web-ui/package.json"
+          "obf/package.json",
+          "obf/src/web-ui/package.json"
         ],
         "frontend": {
           "roots": [
