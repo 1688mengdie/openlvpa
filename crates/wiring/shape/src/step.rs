@@ -1,5 +1,3 @@
-use crate::chain::ORDER;
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Step {
     Wrapper,
@@ -16,11 +14,12 @@ pub enum Step {
     Build,
 }
 
-impl Step {
-    pub fn from_name(name: &str) -> Option<Step> {
-        ORDER.iter().copied().find(|step| step.name() == name)
-    }
+pub struct Guarantee {
+    pub on_disk: &'static [&'static str],
+    pub leaves: &'static [&'static str],
+}
 
+impl Step {
     pub fn name(self) -> &'static str {
         match self {
             Step::Wrapper => "wrapper",
@@ -45,28 +44,16 @@ impl Step {
                 leaves: &["rustc-wrapper", "capability-panorama", "rustc-wrapper-build-dir"],
             },
             Step::Take => Guarantee {
-                on_disk: &[
-                    "obf-tree",
-                    "openalgo-desktop-tree",
-                    "host-manifest",
-                    "host-lock",
-                    "host-pnpm-workspace",
-                    "host-pnpm-lock",
-                ],
+                on_disk: &["obf-tree", "openalgo-desktop-tree"],
                 leaves: &["obf-tree", "openalgo-desktop-tree"],
             },
             Step::Absorb => Guarantee {
-                on_disk: &[
-                    "host-manifest",
-                    "host-lock",
-                    "host-pnpm-workspace",
-                    "host-pnpm-lock",
-                ],
-                leaves: &["host-manifest", "host-lock", "host-pnpm-workspace", "host-pnpm-lock"],
+                on_disk: &[],
+                leaves: &["host-notice"],
             },
             Step::Merge => Guarantee {
                 on_disk: &["host-manifest", "host-pnpm-workspace", "host-gitattributes"],
-                leaves: &["host-manifest", "host-pnpm-workspace", "host-gitattributes"],
+                leaves: &["host-manifest", "host-lock", "host-pnpm-workspace", "host-pnpm-lock", "host-gitattributes"],
             },
             Step::Strip => Guarantee {
                 on_disk: &["obf-tree", "openalgo-desktop-tree"],
@@ -115,7 +102,39 @@ impl Step {
     }
 }
 
-pub struct Guarantee {
-    pub on_disk: &'static [&'static str],
-    pub leaves: &'static [&'static str],
+pub static ORDER: &[Step] = &[
+    Step::Wrapper,
+    Step::Take,
+    Step::Absorb,
+    Step::Merge,
+    Step::Strip,
+    Step::Deshell,
+    Step::Seam,
+    Step::Patches,
+    Step::Install,
+    Step::Frontend,
+    Step::Dev,
+    Step::Build,
+];
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Entrance {
+    Dev,
+    Build,
+}
+
+impl Entrance {
+    pub fn name(self) -> &'static str {
+        match self {
+            Entrance::Dev => "dev",
+            Entrance::Build => "build",
+        }
+    }
+
+    pub fn terminus(self) -> Step {
+        match self {
+            Entrance::Dev => Step::Dev,
+            Entrance::Build => Step::Build,
+        }
+    }
 }

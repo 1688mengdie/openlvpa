@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { dirname, join } from 'node:path';
 import { bundleDir, REPO_ROOT, WORK_DIR } from './desktop-config.mjs';
 import { treeDidNotGrow } from './tauri-run.mjs';
-import { ENTRANCES, chainGuaranteesOf } from './chain-order.mjs';
+import { chainGuaranteesOf } from './chain-order.mjs';
 import {
   absorbedProjects,
   packageDirectory,
@@ -18,13 +18,25 @@ import { targetDir } from './target-dir.mjs';
 
 export const SEAM_RUN_RECORD_DIR = 'lvpa-seam-run';
 
+export const STEP_RECORD_DIR = 'lvpa-step-run';
+
 export const REPORT_SUFFIX = 'ran-at.txt';
+
+export function reportsOf(stepNames) {
+  const held = new Set();
+  for (const name of stepNames) {
+    if (existsSync(reportAt(name))) held.add(name);
+  }
+  return held;
+}
 
 export const TAKEN_SUFFIX = 'taken-at.txt';
 
 export const REPOSITORY_ENV = 'LVPA_REPO_ROOT';
 
 const SENTINEL = '# [upstream-sync]';
+
+const MARKER_OPEN = ' (generated; do not edit by hand)';
 
 const SEGMENTED_FILES = () => [
   join(REPO_ROOT, 'Cargo.toml'),
@@ -33,6 +45,10 @@ const SEGMENTED_FILES = () => [
   join(resolveLanding(payloadDeclaration()), 'meta.json'),
 ];
 
+function regionHead(body) {
+  return body.endsWith(MARKER_OPEN) ? body.slice(0, -MARKER_OPEN.length) : body;
+}
+
 export function segments(text) {
   const held = new Map();
   let open = null;
@@ -40,14 +56,17 @@ export function segments(text) {
     const trimmed = line.trim();
     if (!trimmed.startsWith(SENTINEL)) continue;
     const body = trimmed.slice(SENTINEL.length).trim();
-    if (body.endsWith(' end')) {
-      if (open !== null && `${open.head} end` === body) {
-        held.set(open.head, open.lines.join('\n'));
-        open = null;
-      }
+    if (open === null) {
+      if (!body.endsWith(MARKER_OPEN)) continue;
+      open = { head: regionHead(body), lines: [] };
       continue;
     }
-    if (open === null) open = { head: body, lines: [] };
+    if (body === `${open.head} end`) {
+      held.set(open.head, open.lines.join('\n'));
+      open = null;
+      continue;
+    }
+    open.lines.push(trimmed);
   }
   return held;
 }
@@ -92,7 +111,11 @@ function absorbedTree(id) {
 }
 
 function backendManifest(project) {
-  return join(projectRoot(project), ...packageDirectory(project).split('/').filter(Boolean), 'Cargo.toml');
+  const crate = packageDirectory(project);
+  if (crate === '') {
+    return join(projectRoot(project), 'Cargo.toml');
+  }
+  return join(projectRoot(project), ...crate.split('/').filter(Boolean), 'Cargo.toml');
 }
 
 function takenRecord(project) {
@@ -141,7 +164,7 @@ function digestOf(entries) {
 }
 
 const READS = new Map([
-  ['obf-tree', () => READS.get('upstream')('obf')],
+  ['obf-tree', () => READS.get('upstream')('openbitfun')],
   ['openalgo-desktop-tree', () => READS.get('upstream')('openalgo-desktop')],
   ['own-crates', (path) => READS.get('root')(path)],
   ['seam-crates', (path) => READS.get('root')(path)],
@@ -151,6 +174,7 @@ const READS = new Map([
   ['host-pnpm-workspace', (path) => READS.get('root-file')(path)],
   ['host-pnpm-lock', (path) => READS.get('root-file')(path)],
   ['host-gitattributes', (path) => READS.get('root-file')(path)],
+  ['host-notice', (path) => READS.get('root-file')(path)],
   ['build-bench', (path) => READS.get('target')(path)],
   ['rustc-wrapper', () => (existsSync(wrapperBinary())
     ? null
@@ -166,10 +190,7 @@ const READS = new Map([
     : `${join(targetDir(), 'debug')} stands nowhere, so no wrapper build has landed`)],
   ['trees-carry-no-artifact', () => {
     const left = treeDidNotGrow();
-    return left.length === 0
-      ? null
-      : `${left.join(', ')} stands inside an absorbed tree and stood nowhere before this pass, and a tree carries static source ` +
-        'alone: these are the directories a build root writes, so this pass stops before the step that would find them there';
+    return left.length === 0 ? null : 'a build root stands inside an absorbed tree, and a tree carries static source alone';
   }],
   ['upstream', (id) => {
     const project = absorbedTree(id);
@@ -242,21 +263,17 @@ const STANDS = new Map([
     : null)],
   ['target-file', (path) => (existsSync(path) ? `${path}:${statSync(path).size}` : null)],
   ['trees-carry-no-artifact', () => null],
-  ['target-dir-entry', (path) => {
-    const directory = join(targetDir(), path);
-    const left = existsSync(directory)
-      ? readdirSync(directory, { withFileTypes: true })
-          .filter((entry) => entry.isFile())
-          .map((entry) => `${entry.name}:${statSync(join(directory, entry.name)).size}`)
-      : [];
-    return left.length === 0 ? null : digestOf(left);
-  }],
+  ['target-dir-entry', targetDirEntryStand],
+  ['manifest-segment', manifestSegmentStand],
+  ['record', recordStand],
   ['member', (path) => {
     const [root, ...rest] = path.split('/');
     const project = absorbedTree(root);
     if (project === undefined) return null;
     const directory = rest.length === 0
-      ? join(projectRoot(project), ...packageDirectory(project).split('/').filter(Boolean))
+      ? (packageDirectory(project) === ''
+        ? projectRoot(project)
+        : join(projectRoot(project), ...packageDirectory(project).split('/').filter(Boolean)))
       : join(projectRoot(project), ...rest);
     const manifest = directoryReads(directory);
     if (manifest === null) return null;
@@ -278,25 +295,27 @@ const STANDS = new Map([
 ]);
 const READ_KINDS = new Set(['report', 'root-file', ...STANDS.keys()]);
 const READERS = new Map([
-  ['obf-tree', ['obf', 'report']],
+  ['obf-tree', ['openbitfun', 'report']],
   ['openalgo-desktop-tree', ['openalgo-desktop', 'report']],
-  ['host-manifest', ['Cargo.toml', 'root-file']],
+  ['host-manifest', ['Cargo.toml', 'manifest-segment']],
   ['host-lock', ['Cargo.lock', 'root-file']],
-  ['host-pnpm-workspace', ['pnpm-workspace.yaml', 'root-file']],
+  ['host-pnpm-workspace', ['pnpm-workspace.yaml', 'manifest-segment']],
   ['host-pnpm-lock', ['pnpm-lock.yaml', 'root-file']],
-  ['host-gitattributes', ['.gitattributes', 'root-file']],
+  ['host-gitattributes', ['.gitattributes', 'manifest-segment']],
+  ['host-notice', ['NOTICE', 'root-file']],
   ['own-crates', ['crates/', 'root']],
   ['seam-crates', ['crates/seams/', 'root']],
   ['patch-declarations', ['patches/', 'root']],
   ['build-bench', ['lvpa-build-bench', 'target-dir-entry']],
-  ['pnpm-store', ['pnpm-store', 'target-dir-entry']],
+  ['pnpm-store', ['lvpa-pnpm-store', 'target-dir-entry']],
   ['rustc-wrapper', [() => wrapperBinary(), 'target-file']],
   ['capability-panorama', [() => panoramaBinary(), 'target-file']],
   ['rustc-wrapper-build-dir', ['debug', 'target-dir-entry']],
   ['trees-carry-no-artifact', ['', 'trees-carry-no-artifact']],
   ['work-dir', ['', 'work-dir']],
   ['openalgo-desktop-backend', ['openalgo-desktop', 'member']],
-  ['seam-run-record', [SEAM_RUN_RECORD_DIR, 'target']],
+  ['seam-run-record', ['seam-record', 'record']],
+  ['step-record', ['step-record', 'record']],
   ['miniapp-payload', ['', 'miniapp']],
   ['bundle', ['', 'bundle-dir']],
 ]);
@@ -315,10 +334,10 @@ function readersOver(stepName, declared) {
 
 let guards = null;
 
-function guaranteeTable() {
+function requirementTable() {
   if (guards === null) {
     guards = new Map(
-      [...chainGuaranteesOf(ENTRANCES)].map(([name, declared]) => [
+      [...chainGuaranteesOf()].map(([name, declared]) => [
         name,
         { onDisk: readersOver(name, declared.onDisk), leaves: readersOver(name, declared.leaves) },
       ]),
@@ -327,8 +346,44 @@ function guaranteeTable() {
   return guards;
 }
 
+const TAKEN_TREES = new Set(['obf-tree', 'openalgo-desktop-tree']);
+
+function producerOfTree(id) {
+  for (const [name, held] of requirementTable()) {
+    if (held.leaves.some(([leaf]) => leaf === id)) return name;
+  }
+  return undefined;
+}
+
+function nodeAheadOf(reading, id, stepName) {
+  const producer = producerOfTree(id);
+  const node = reading.nodeOf(producer, id);
+  if (reading.outcomeOf(node) === 'landed') return false;
+  return reading.path.indexOf(producer) > reading.path.indexOf(stepName);
+}
+
+function onDiskFor(stepName, reading) {
+  const held = requirementTable().get(stepName);
+  if (held === undefined) {
+    throw new Error(
+      `[step-guarantees] the shape names the step \`${stepName}\`, and Step::guarantee names no entry for it, so nothing says what that step refuses and what it leaves`,
+    );
+  }
+  if (reading === undefined) return held.onDisk;
+  const own = held.onDisk.filter(([id]) => TAKEN_TREES.has(id) && producerOfTree(id) === stepName);
+  const later = held.onDisk.filter(([id]) => TAKEN_TREES.has(id) && producerOfTree(id) !== stepName && nodeAheadOf(reading, id, stepName));
+  const dropped = [...own, ...later];
+  if (later.length > 0 && dropped.length === held.onDisk.length) {
+    throw new Error(
+      `[step-guarantees] ${stepName} reads ${held.onDisk.map(([id]) => id).join(', ')}, and every one of them is a tree this ` +
+        `pass takes after it: ${stepName} reads what the chain has already landed`,
+    );
+  }
+  return held.onDisk.filter(([id]) => !dropped.some(([at]) => at === id));
+}
+
 export function leavesOf(stepName) {
-  const held = guaranteeTable().get(stepName);
+  const held = requirementTable().get(stepName);
   if (held === undefined) {
     throw new Error(
       `[step-guarantees] the shape names the step \`${stepName}\`, and Step::guarantee names no entry for it, so nothing says what that step refuses and what it leaves`,
@@ -343,17 +398,18 @@ export function guaranteesOf(stepName) {
 
 function readerOf(stepName, leaf) {
   const [id, at, kind] = leaf;
-  const stands = kind === 'report'
-    ? reports
-    : kind === 'root-file'
-      ? rootFileStand
-      : STANDS.get(kind);
   if (!READ_KINDS.has(kind)) {
     throw new Error(
       `[step-guarantees] ${stepName} names ${id}, and ${kind} is no reader kind this declaration binds`,
     );
   }
-  return { at: typeof at === 'function' ? at() : at, stands };
+  const sits = typeof at === 'function' ? at() : at;
+  const stands = kind === 'report'
+    ? reports
+    : kind === 'root-file'
+      ? rootFileStand
+      : (said, where) => STANDS.get(kind)(said ?? where);
+  return { at: sits, stands };
 }
 
 function reports(projectId) {
@@ -371,9 +427,42 @@ function rootFileStand(path) {
   return `${file}:${text.length}:${createHash('sha256').update(text).digest('hex')}`;
 }
 
+function manifestSegmentStand(path) {
+  const file = join(REPO_ROOT, ...path.split('/'));
+  if (!existsSync(file)) return null;
+  return digestOf([...segments(readFileSync(file, 'utf8')).keys()].sort());
+}
+
+function targetDirEntryStand(path) {
+  const directory = join(targetDir(), path);
+  const left = existsSync(directory)
+    ? readdirSync(directory, { withFileTypes: true })
+        .filter((entry) => entry.isFile())
+        .map((entry) => `${entry.name}:${statSync(join(directory, entry.name)).size}`)
+    : [];
+  return left.length === 0 ? null : digestOf(left);
+}
+
+const RECORD_DIRS = new Map([
+  ['seam-record', SEAM_RUN_RECORD_DIR],
+  ['step-record', STEP_RECORD_DIR],
+]);
+
+function recordStand(id) {
+  const directory = join(targetDir(), RECORD_DIRS.get(id));
+  if (!existsSync(directory)) return null;
+  const left = readdirSync(directory);
+  return left.length === 0 ? null : digestOf(left);
+}
+
 export function beforeOf(stepName, leaves) {
   const was = new Map();
   for (const [id, ...rest] of leaves) {
+    if (id === undefined) {
+      throw new Error(
+        `[step-guarantees] ${stepName} names a leaf this declaration binds no reader for: ${JSON.stringify(leaves)}`,
+      );
+    }
     const { at, stands } = readerOf(stepName, [id, ...rest]);
     was.set(id, stands(at));
   }
@@ -381,7 +470,7 @@ export function beforeOf(stepName, leaves) {
 }
 
 function reportAt(stepName) {
-  return join(targetDir(), `${stepName}.${REPORT_SUFFIX}`);
+  return join(targetDir(), STEP_RECORD_DIR, `${stepName}.${REPORT_SUFFIX}`);
 }
 
 export function stepRan(stepName, sequence) {
@@ -390,8 +479,8 @@ export function stepRan(stepName, sequence) {
   writeFileSync(report, `${stepName}:${sequence}\n`, 'utf8');
 }
 
-export function guardOf(stepName) {
-  for (const [id, path] of leavesOf(stepName).onDisk) {
+export function guardOf(stepName, reading) {
+  for (const [id, path] of onDiskFor(stepName, reading)) {
     const read = READS.get(id);
     if (read === undefined) {
       throw new Error(

@@ -1,25 +1,24 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REPO_ROOT, TAURI_CONF, bundleDir, rootConfigPath, shellConfig, tauriCli } from './desktop-config.mjs';
 import {
+  TREE_PACKAGE_MANIFEST,
   absorbedProjects,
-  buildConfigFiles,
-  hostDerivedPath,
-  packageManifestPath,
   projectRoot,
+  snapshotSections,
 } from './absorbed-sources.mjs';
 import { ENTRANCES, chainOrder, shapeSteps } from './chain-order.mjs';
 import {
   SEAM_RUN_RECORD_DIR,
   beforeOf,
-  guaranteesOf,
   guardOf,
   held,
   landedOf,
   leavesOf,
+  reportsOf,
   settleTrees,
   stepRan,
 } from './step-guarantees.mjs';
@@ -58,19 +57,45 @@ function wrapper() {
   if (!existsSync(beside)) {
     fail('wrapper', `the install left no ${beside}`);
   }
+  settleEdges(binary);
   process.stdout.write(`[run-chain] wrapper: ${binary} is in place beside ${beside}\n`);
+}
+
+/// The edges the two trees state in cards of their own are landed before the graph is read,
+/// and the pass that lands them puts every card back before it returns: the trees keep their
+/// own words, and the graph this chain resolves is the graph the mirror builds from.
+function settleEdges(binary) {
+  const landed = spawnSync(binary, ['--settle-member-edges'], {
+    cwd: REPO_ROOT,
+    env: wrapperEnvironment(),
+    encoding: 'utf8',
+  });
+  if (landed.status !== 0) {
+    fail(
+      'wrapper',
+      `${binary} --settle-member-edges named an edge it cannot land in the card that states it: ` +
+        `${(landed.stderr ?? '').trim() || (landed.stdout ?? '').trim()}`,
+    );
+  }
+  for (const line of (landed.stderr ?? '').split(/\r?\n/)) {
+    if (line.includes('edge landed:')) process.stdout.write(`[run-chain] ${line.replace('[lvpa-wrapper] ', '')}\n`);
+  }
 }
 
 function step(names, name) {
   run(process.execPath, [join(here, 'sync-upstream.mjs'), ...names], name, wrapperEnvironment());
 }
 
+function takeStep() {
+  step(['take'], 'take');
+}
+
 function absorb() {
-  step(['take'], 'absorb');
+  step(['absorb'], 'absorb');
 }
 
 function merge() {
-  step(['take', 'merge'], 'merge');
+  step(['merge'], 'merge');
 }
 
 function stripStep() {
@@ -82,7 +107,7 @@ function deshellStep() {
 }
 
 function patches() {
-  step(['take', 'merge', 'patches'], 'patches');
+  step(['patches'], 'patches');
 }
 
 function seam() {
@@ -113,6 +138,7 @@ function seam() {
   }
   process.stdout.write(`[run-chain] seam: ${rows.length} seam(s) over ${covered.length} covered crate(s)\n`);
   const recordDir = join(targetDir(), SEAM_RUN_RECORD_DIR);
+  rmSync(recordDir, { recursive: true, force: true });
   mkdirSync(recordDir, { recursive: true });
   writeFileSync(join(recordDir, 'refused.json'), 'no covered crate compiled as upstream on this pass\n', 'utf8');
 }
@@ -138,10 +164,16 @@ const RELEASE_ARTIFACTS = [
   },
 ];
 
+function pnpmStore() {
+  const store = join(targetDir(), 'lvpa-pnpm-store');
+  mkdirSync(store, { recursive: true });
+  return store;
+}
+
 const ESBUILD_HOOK = `
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
-const STORE = '${join(targetDir(), 'pnpm-store', 'virtual').split('\\').join('/')}';
+const STORE = '${join(pnpmStore(), 'virtual').split('\\').join('/')}';
 const MODULES = '${join(REPO_ROOT, 'node_modules').split('\\').join('/')}';
 const LOCKS = '${join(REPO_ROOT, 'pnpm-lock.yaml').split('\\').join('/')}';
 function lockedVersion() {
@@ -180,34 +212,55 @@ const BUILD_BENCH = 'lvpa-build-bench';
 
 function install() {
   const projects = absorbedProjects();
+  const manifests = new Map();
   for (const project of projects) {
-    const manifest = packageManifestPath(project);
-    if (manifest !== '') {
-      const path = hostDerivedPath(project);
+    const held = snapshotSections(project);
+    for (const name of buildConfigFiles(project)) {
+      if (name.endsWith(TREE_PACKAGE_MANIFEST)) {
+        if (!held.has(name)) {
+          fail(
+            'install',
+            `${project.snapshotFile} carries no segment for ${project.id}/${name}, and a package.json stands inside an absorbed ` +
+              'tree, so the take strips it and the snapshot is the one copy this step can write a bench from',
+          );
+        }
+        manifests.set(join(projectRoot(project), ...name.split('/')), held.get(name).text);
+        continue;
+      }
+      const path = join(projectRoot(project), ...name.split('/'));
       if (!existsSync(path)) {
-        fail('install', `${path} is not on disk, so the tree ${project.id} declares has no manifest to read`);
+        fail('install', `${path} is not on disk, and ${project.id} names it as a build input`);
       }
     }
-    for (const name of buildConfigFiles(project)) {
-      const path = join(projectRoot(project), ...name.split('/'));
-      if (existsSync(path)) continue;
-      if (name.endsWith('build.rs')) continue;
-      fail('install', `${path} is not on disk, and ${project.id} names it as a build input`);
-    }
   }
-  const outside = join(targetDir(), 'pnpm-store');
-  mkdirSync(outside, { recursive: true });
-  const environment = { ...process.env, npm_config_store_dir: outside, PNPM_HOME: join(outside, 'home') };
+  const store = pnpmStore();
+  const modules = join(targetDir(), 'lvpa-node-modules');
+  const pnpmHome = join(targetDir(), 'lvpa-pnpm-home');
+  mkdirSync(modules, { recursive: true });
+  mkdirSync(pnpmHome, { recursive: true });
+  const environment = {
+    ...process.env,
+    npm_config_store_dir: store,
+    npm_config_virtual_store_dir: modules,
+    npm_config_global_dir: pnpmHome,
+    PNPM_HOME: pnpmHome,
+  };
   run(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['install', '--frozen-lockfile'], 'install', environment);
   const bench = join(targetDir(), BUILD_BENCH);
   rmSync(bench, { recursive: true, force: true });
   const command = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
   for (const artifact of RELEASE_ARTIFACTS) {
-    const packageRoot = join(REPO_ROOT, ...artifact.package.split('/'));
     const built = join(bench, ...artifact.package.split('/'));
-    const spared = join(packageRoot, ...artifact.produces.split('/'));
+    const spared = join(REPO_ROOT, ...artifact.package.split('/'), ...artifact.produces.split('/'));
     const wasSpared = existsSync(spared) ? digestOfTree(spared) : null;
-    copyInputs(packageRoot, built);
+    rmSync(built, { recursive: true, force: true });
+    mkdirSync(built, { recursive: true });
+    for (const [at, text] of manifests) {
+      if (!at.startsWith(`${built}${sep}`)) continue;
+      const destination = join(built, at.slice(built.length + 1));
+      mkdirSync(dirname(destination), { recursive: true });
+      writeFileSync(destination, text, 'utf8');
+    }
     const [kind, target] = artifact.producer;
     const ran = kind === 'run'
       ? spawnSync(command, ['-C', built, 'run', target], {
@@ -264,35 +317,47 @@ function digestOfTree(path) {
   return read(path);
 }
 
-const INPUT_SKIP = new Set(['node_modules', 'dist', 'build', 'target', '.turbo', 'coverage', '.git']);
-
-function copyInputs(from, into) {
-  if (!existsSync(from)) {
-    fail('install', `${from} is not on disk, and it is the package whose build this step reads`);
-  }
-  rmSync(into, { recursive: true, force: true });
-  const walk = (at, to) => {
-    mkdirSync(to, { recursive: true });
-    for (const entry of readdirSync(at, { withFileTypes: true })) {
-      if (INPUT_SKIP.has(entry.name) || entry.name.startsWith('.vite')) continue;
-      const source = join(at, entry.name);
-      const destination = join(to, entry.name);
-      if (entry.isDirectory()) {
-        walk(source, destination);
-        continue;
-      }
-      if (entry.isFile()) cpSync(source, destination);
-    }
-  };
-  walk(from, into);
-}
-
-function relativeToRepo(dir) {
-  return dir.slice(REPO_ROOT.length + 1).split('\\').join('/');
-}
-
 function frontend() {
   run(process.execPath, [join(here, 'sync-openalgo-frontend.mjs')], 'frontend');
+}
+
+/// The graph the launcher reads is selected from the cards that stand when cargo reads them, and
+/// the launcher does not compile: cargo's own wrapper pass only runs where a crate is handed to the
+/// compiler, so the cards are put at the series this repository lands by a read that stops at the
+/// graph. The edges land before the selection and stand until it is done.
+function resolveTheGraph(command) {
+  const binary = wrapperBinary();
+  if (!existsSync(binary)) {
+    fail(command, `${binary} is not on disk, so the graph would be read from the trees' own cards`);
+  }
+  const read = spawnSync(binary, ['--land-card-edges'], {
+    cwd: REPO_ROOT,
+    env: wrapperEnvironment(),
+    encoding: 'utf8',
+  });
+  if (read.status !== 0) {
+    fail(
+      command,
+      `${binary} --land-card-edges could not land the edges the cards state: ${(read.stderr ?? '').trim()}`,
+    );
+  }
+  const settled = spawnSync('cargo', ['metadata', '--format-version', '1'], {
+    cwd: REPO_ROOT,
+    env: wrapperEnvironment(),
+    encoding: 'utf8',
+    shell: true,
+  });
+  if (settled.error) {
+    fail(command, `cargo could not start: ${settled.error.message}`);
+  }
+  if (settled.status !== 0) {
+    const named = /failed to select a version for `([^`]+)`/.exec(settled.stderr ?? '')?.[1];
+    fail(
+      command,
+      `the graph the launcher reads does not resolve` + (named === undefined ? '' : `: ${named} stands at two series that both hold \`links\``),
+    );
+  }
+  process.stdout.write(`[run-chain] ${command}: the graph the launcher reads resolves as the cards stand\n`);
 }
 
 function shell() {
@@ -302,12 +367,25 @@ function shell() {
   }
   return cli;
 }
-function guaranteeOf(step) {
+function stated(step) {
   try {
     leavesOf(step);
   } catch (error) {
     fail(step, error.message);
   }
+}
+
+function readingFor(entranceName, stepName) {
+  const path = chainOrder(entranceName);
+  const stood = reportsOf(path);
+  return {
+    path,
+    nodeOf: (id) => id,
+    outcomeOf: (node) => {
+      const at = path.indexOf(node.split(':')[0]);
+      return at === -1 || !stood.has(node.split(':')[0]) ? 'unknown' : 'landed';
+    },
+  };
 }
 
 function before(step, leaves) {
@@ -318,11 +396,10 @@ function before(step, leaves) {
   }
 }
 
-function guard(step) {
-  guaranteeOf(step);
+function guard(step, reading) {
   let said;
   try {
-    said = guardOf(step);
+    said = guardOf(step, reading);
   } catch (error) {
     fail(step, error.message);
   }
@@ -330,7 +407,6 @@ function guard(step) {
 }
 
 function landed(step, was) {
-  guaranteeOf(step);
   try {
     return landedOf(step, was);
   } catch (error) {
@@ -382,6 +458,7 @@ async function launch(command) {
     fail(command, `the shell face was written to ${path} and this pass hands tauri ${rootConfigPath()}`);
   }
   const carrier = wrapperArguments();
+  resolveTheGraph(command);
   let code;
   let error;
   let log;
@@ -445,7 +522,20 @@ function sweepOnce() {
 }
 process.on('exit', sweepOnce);
 
-const RECIPES = [wrapper, absorb, absorb, merge, stripStep, deshellStep, seam, patches, install, frontend, dev, build];
+const RECIPES = new Map([
+  ['wrapper', wrapper],
+  ['take', takeStep],
+  ['absorb', absorb],
+  ['merge', merge],
+  ['strip', stripStep],
+  ['deshell', deshellStep],
+  ['seam', seam],
+  ['patches', patches],
+  ['install', install],
+  ['frontend', frontend],
+  ['dev', dev],
+  ['build', build],
+]);
 
 let entranceChecked = false;
 function entrance() {
@@ -455,27 +545,31 @@ function entrance() {
   const named = ENTRANCES.flatMap((name) => chainOrder(name)).filter(
     (step, index, all) => all.indexOf(step) === index,
   );
-  if (RECIPES.length !== steps.length || named.join('\n') !== steps.join('\n')) {
+  const unmatched = steps.filter((step) => !RECIPES.has(step));
+  if (unmatched.length !== 0 || named.join('\n') !== steps.join('\n')) {
     fail(
       'entrance',
-      `the runner carries ${RECIPES.length} recipe(s) over ${named.join(', ')}, and crates/wiring/shape names ${steps.length} ` +
-        `step(s) (${steps.join(', ')}): a recipe would answer to the wrong step name`,
+      `the runner carries recipe(s) for ${[...RECIPES.keys()].join(', ')}, and crates/wiring/shape names the step(s) ` +
+        `(${steps.join(', ')}): ${unmatched.join(', ')} answers to no recipe, and a step no recipe answers to is a step ` +
+        'the chain would run under another step\'s name',
     );
   }
 }
 
 function recipe(step) {
-  const at = shapeSteps().indexOf(step);
-  return at === -1 ? undefined : RECIPES[at];
+  const held = RECIPES.get(step);
+  if (held !== undefined && shapeSteps().includes(step)) return held;
+  return undefined;
 }
 
 const STATED = new Set(['take', 'absorb', 'merge', 'frontend']);
 
-async function runStep(name) {
+async function runStep(name, entranceName) {
   entrance();
-  guard(name);
-  const leaves = guaranteesOf(name);
-  const was = before(name, leaves);
+  const reading = readingFor(entranceName, name);
+  stated(name);
+  guard(name, reading);
+  const was = before(name, leavesOf(name).leaves);
   const ahead = STATED.has(name) ? held() : null;
   await recipe(name)();
   for (const project of absorbedProjects()) settleTrees(project.id);
@@ -487,10 +581,10 @@ async function runStep(name) {
   );
 }
 
-export async function runChain(entrance) {
-  const ordered = chainOrder(entrance);
+export async function runChain(entranceName) {
+  const ordered = chainOrder(entranceName);
   for (const name of ordered) {
-    await runStep(name);
+    await runStep(name, entranceName);
   }
   return ordered;
 }
@@ -510,7 +604,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       );
       process.exit(2);
     }
-    await runStep(requested[0]);
+    await runStep(requested[0], 'dev');
   } else if (requested.length === 2 && requested[0] === 'step') {
     if (!recipe(requested[1])) {
       process.stderr.write(
@@ -518,7 +612,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       );
       process.exit(2);
     }
-    await runStep(requested[1]);
+    await runStep(requested[1], 'dev');
   } else if (requested.length === 2 && requested[0] === 'land') {
     if (!recipe(requested[1])) {
       process.stderr.write(
@@ -526,8 +620,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       );
       process.exit(2);
     }
-    const changed = landed(requested[1], before(requested[1], guaranteesOf(requested[1])));
-    process.stdout.write(`${requested[1]} left ${changed.join(', ')}\n`);
+    process.stdout.write(`${requested[1]} left ${landed(requested[1], before(requested[1], leavesOf(requested[1]).leaves)).join(', ')}\n`);
   } else {
     process.stderr.write('[run-chain] name one step, or `order dev` / `order build` to list one entrance\n');
     process.exit(2);
