@@ -9,3 +9,7 @@ packages:
   - "obf/src/mobile-web"
   - "obf/src/web-ui"
 # [upstream-sync] absorbed frontend packages end
+allowBuilds:
+  '@openuidev/lang-core': false
+  '@parcel/watcher': false
+  esbuild: true
