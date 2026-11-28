@@ -15,7 +15,7 @@ name = "lvpa-capability-panorama"
 path = "src/bin/capability-panorama.rs"
 
 [dependencies]
-syn = { workspace = true, features = ["visit"] }
+syn = { workspace = true, features = ["visit", "full", "parsing", "printing", "proc-macro", "derive"] }
 proc-macro2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

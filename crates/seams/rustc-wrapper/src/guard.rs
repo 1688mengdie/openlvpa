@@ -53,11 +53,8 @@ fn peel(args: &mut Vec<String>, self_exe: &Path) -> Peel {
         return Peel::NoArguments;
     }
 
-    let mut peeled = 0;
     while args.len() > 1 && is_wrapper_layer(&args[0], self_exe) {
-        let layer = args.remove(0);
-        peeled += 1;
-        eprintln!("[lvpa-wrapper] peeled wrapper layer {peeled}: {layer}");
+        args.remove(0);
     }
 
     let real = args.remove(0);

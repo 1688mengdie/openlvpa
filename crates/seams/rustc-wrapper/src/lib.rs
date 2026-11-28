@@ -1,3 +1,4 @@
+pub mod edges;
 pub mod rewrite;
 pub mod rules;
 pub mod semantic;
